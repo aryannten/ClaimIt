@@ -31,8 +31,6 @@ const els = {
   currencySelect: document.getElementById('currencySelect'),
   detectedRegionText: document.getElementById('detectedRegionText'),
   changeCurrencyBtn: document.getElementById('changeCurrencyBtn'),
-  checkIntervalHours: document.getElementById('checkIntervalHours'),
-  thuFriBoost: document.getElementById('thuFriBoost'),
   dryRunToggle: document.getElementById('dryRunToggle'),
   chromeNotifToggle: document.getElementById('chromeNotifToggle'),
   telegramEnabled: document.getElementById('telegramEnabled'),
@@ -226,8 +224,6 @@ async function hydrate() {
   renderStores(settings);
   renderCurrencyControl(settings, region);
 
-  els.checkIntervalHours.value = String(settings.checkIntervalHours ?? 6);
-  els.thuFriBoost.checked = settings.thursdayFridayHourlyBoost !== false;
   els.dryRunToggle.checked = Boolean(settings.dryRun);
   els.chromeNotifToggle.checked = settings.notifications?.chrome !== false;
 
@@ -309,22 +305,6 @@ els.changeCurrencyBtn.addEventListener('click', async () => {
     return;
   }
   els.currencySelect.focus();
-});
-
-els.checkIntervalHours.addEventListener('change', async () => {
-  const hours = Math.max(1, Math.min(168, Number(els.checkIntervalHours.value) || 6));
-  els.checkIntervalHours.value = String(hours);
-  await saveSettings({ checkIntervalHours: hours });
-  if (await sendBgMessage({ type: 'CLAIMIT_RESCHEDULE' })) {
-    flashStatus('Schedule updated');
-  }
-});
-
-els.thuFriBoost.addEventListener('change', async () => {
-  await saveSettings({ thursdayFridayHourlyBoost: els.thuFriBoost.checked });
-  if (await sendBgMessage({ type: 'CLAIMIT_RESCHEDULE' })) {
-    flashStatus('Schedule updated');
-  }
 });
 
 els.dryRunToggle.addEventListener('change', async () => {

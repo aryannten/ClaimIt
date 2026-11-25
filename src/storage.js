@@ -25,6 +25,7 @@ export const STORAGE_KEYS = {
 };
 
 const CYCLE_LOCK_TTL_MS = 5 * 60 * 1000;
+const MAX_HISTORY_ENTRIES = 500;
 
 function hasChromeStorage() {
   return typeof chrome !== 'undefined' && Boolean(chrome?.storage?.local);
@@ -33,8 +34,6 @@ function hasChromeStorage() {
 const DEFAULT_SETTINGS = {
   paused: false,
   dryRun: false,
-  checkIntervalHours: 6,
-  thursdayFridayHourlyBoost: true,
   currency: 'auto',
   remoteConfigUrl: '',
   stores: {
@@ -68,8 +67,10 @@ function mergeSettings(raw = {}) {
     };
   }
   return {
-    ...DEFAULT_SETTINGS,
-    ...raw,
+    paused: Boolean(raw.paused ?? DEFAULT_SETTINGS.paused),
+    dryRun: Boolean(raw.dryRun ?? DEFAULT_SETTINGS.dryRun),
+    currency: typeof raw.currency === 'string' ? raw.currency : DEFAULT_SETTINGS.currency,
+    remoteConfigUrl: typeof raw.remoteConfigUrl === 'string' ? raw.remoteConfigUrl : DEFAULT_SETTINGS.remoteConfigUrl,
     stores: mergedStores,
     notifications: {
       chrome: raw.notifications?.chrome ?? DEFAULT_SETTINGS.notifications.chrome,
@@ -316,6 +317,20 @@ export async function upsertHistoryEntry(entry) {
     updatedAt: now,
     claimedAt: entry.status === 'CLAIMED' ? (existing.claimedAt || now) : existing.claimedAt || null
   };
+
+  const keys = Object.keys(history);
+  if (keys.length > MAX_HISTORY_ENTRIES) {
+    const trimmed = Object.fromEntries(
+      Object.entries(history)
+        .sort(([, a], [, b]) => Date.parse(b.updatedAt || b.claimedAt || 0) - Date.parse(a.updatedAt || a.claimedAt || 0))
+        .slice(0, MAX_HISTORY_ENTRIES)
+    );
+    if (hasChromeStorage()) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.HISTORY]: trimmed });
+    }
+    return trimmed[key];
+  }
+
   if (hasChromeStorage()) {
     await chrome.storage.local.set({ [STORAGE_KEYS.HISTORY]: history });
   }
@@ -342,14 +357,23 @@ export async function setCurrentOffers(offers) {
   await chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_OFFERS]: offers });
 }
 
+const DEFAULT_META = {
+  lastScanAt: null,
+  lastCheckedAt: null,
+  nextScanAt: null,
+  lastManualCheckAt: null,
+  lastCycleId: null,
+  isChecking: false
+};
+
 export async function getMeta() {
   if (!hasChromeStorage()) {
-    return { lastCheckedAt: null, lastCycleId: null, isChecking: false };
+    return { ...DEFAULT_META };
   }
   const data = await chrome.storage.local.get(STORAGE_KEYS.META);
   return data[STORAGE_KEYS.META] && typeof data[STORAGE_KEYS.META] === 'object'
-    ? data[STORAGE_KEYS.META]
-    : { lastCheckedAt: null, lastCycleId: null, isChecking: false };
+    ? { ...DEFAULT_META, ...data[STORAGE_KEYS.META] }
+    : { ...DEFAULT_META };
 }
 
 export async function updateMeta(partial) {

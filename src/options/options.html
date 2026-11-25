@@ -47,28 +47,9 @@
     <section class="section" aria-labelledby="sec-behaviour">
       <div class="section-head">
         <h1 id="sec-behaviour">Behaviour</h1>
-        <p class="helper">Configure background check frequency and dry-run safety mode.</p>
+        <p class="helper">Automatic background scans run once per day at a randomised time.</p>
       </div>
       <div class="panel">
-        <div class="control-row">
-          <div class="control-copy">
-            <label for="checkIntervalHours">Check interval (hours)</label>
-            <p class="helper">How often ClaimIt checks enabled stores for new free-to-keep offers (1 to 168 hours).</p>
-          </div>
-          <input id="checkIntervalHours" name="checkIntervalHours" type="number" inputmode="numeric" min="1" max="168" step="1" class="input input-sm tabular" />
-        </div>
-
-        <div class="control-row">
-          <div class="control-copy">
-            <label for="thuFriBoost">Thursday and Friday hourly checks</label>
-            <p class="helper">Polls hourly on Thursdays and Fridays to catch Epic weekly rotations quickly.</p>
-          </div>
-          <label class="switch">
-            <input id="thuFriBoost" name="thuFriBoost" type="checkbox" />
-            <span class="switch-track" aria-hidden="true"></span>
-          </label>
-        </div>
-
         <div class="control-row">
           <div class="control-copy">
             <label for="dryRunToggle">Dry-run mode</label>

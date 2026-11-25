@@ -20,7 +20,7 @@ Follow these steps to load ClaimIt unpacked in Chrome (or Brave) and verify all 
 
 ## 4. Verify Options Persistence
 1. Click the gear icon in the popup to open `src/options/options.html`.
-2. Toggle **Dry-run mode** ON, change **Check interval** to `4` hours, switch Steam mode to **Notify only**, then reload the Options tab (`Ctrl+R` / `Cmd+R`).
+2. Toggle **Dry-run mode** ON, switch Currency or Steam mode to **Notify only**, then reload the Options tab (`Ctrl+R` / `Cmd+R`).
 3. **Expected:** All modified values persist after reload; store mode remains **Notify only** even if you toggle the store checkbox off and back on.
 
 ## 5. Trigger "Check now" & Dry-run Verification
@@ -44,7 +44,7 @@ Follow these steps to load ClaimIt unpacked in Chrome (or Brave) and verify all 
 1. Open the **service worker** DevTools Console (`chrome://extensions` -> **service worker**).
 2. Run:
    ```js
-   chrome.alarms.create('claimit_check_alarm', { delayInMinutes: 0.1 });
+   chrome.alarms.create('claimit_check_alarm', { when: Date.now() + 5000 });
    ```
 3. Wait ~6 seconds and refresh Options logs.
 4. **Expected:** `runCheckCycle` triggers with `(alarm)` and logs the new cycle cleanly without overlapping or duplicate alarms.

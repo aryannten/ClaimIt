@@ -1,11 +1,17 @@
 /**
  * ClaimIt MV3 Background Service Worker
- * Manages chrome.alarms scheduling (6h default, hourly Thu/Fri boost),
- * startup/install catch-up checks, notification button clicks, and UI messages.
+ * Uses a once-daily randomized one-shot alarm (chrome.alarms with `when`),
+ * delayed missed-scan catch-up on startup/install, notification clicks, and UI IPC.
+ * Runs exclusively via Chrome events with no background timers or idle state.
  */
 
 import { runCheckCycle, claimSingleOffer, abortActiveAutomation } from './engine.js';
-import { getSettings, saveSettings, clearHistory } from './storage.js';
+import { getSettings, saveSettings, clearHistory, getMeta, updateMeta } from './storage.js';
+import {
+  CHECK_ALARM_NAME,
+  checkManualRateLimit,
+  syncScheduleOnStartup
+} from './scheduler.js';
 import { getSelectorsConfig } from './remote-config.js';
 import {
   getNotificationTarget,
@@ -15,45 +21,19 @@ import {
 import { focusTab } from './providers/tab-helpers.js';
 import { logger } from './logger.js';
 
-export const CHECK_ALARM_NAME = 'claimit_check_alarm';
+export { CHECK_ALARM_NAME };
 
 /**
- * Pure helper computing the alarm interval in minutes.
- * Uses hourly polling on Thursdays (4) and Fridays (5) when boost is enabled.
- * @param {object} settings
- * @param {Date} [now=new Date()]
- * @returns {number}
+ * Run an on-demand manual check enforced by the 5-minute rate limit in chrome.storage.local.
  */
-export function computeAlarmPeriodMinutes(settings, now = new Date()) {
-  const configuredHours = Math.max(1, Number(settings?.checkIntervalHours ?? 6));
-  const configuredMinutes = Math.round(configuredHours * 60);
-  const day = now.getDay(); // 0=Sun ... 4=Thu, 5=Fri
-  const isThuOrFri = day === 4 || day === 5;
-  if (settings?.thursdayFridayHourlyBoost !== false && isThuOrFri) {
-    return Math.min(60, configuredMinutes);
+export async function runManualCheck(nowMs = Date.now()) {
+  const meta = await getMeta();
+  const limit = checkManualRateLimit(meta.lastManualCheckAt, nowMs);
+  if (!limit.allowed) {
+    return { skipped: true, rateLimited: true, retryAfterMs: limit.retryAfterMs };
   }
-  return configuredMinutes;
-}
-
-/**
- * Synchronize chrome.alarms with current user settings and day-of-week schedule.
- */
-export async function syncAlarmSchedule() {
-  const settings = await getSettings();
-  const periodInMinutes = computeAlarmPeriodMinutes(settings);
-
-  const existing = await chrome.alarms.get(CHECK_ALARM_NAME);
-  if (existing && existing.periodInMinutes === periodInMinutes) {
-    return periodInMinutes;
-  }
-
-  await chrome.alarms.clear(CHECK_ALARM_NAME);
-  await chrome.alarms.create(CHECK_ALARM_NAME, {
-    delayInMinutes: periodInMinutes,
-    periodInMinutes
-  });
-  await logger.debug('scheduler', `Alarm scheduled every ${periodInMinutes} min`);
-  return periodInMinutes;
+  await updateMeta({ lastManualCheckAt: new Date(nowMs).toISOString() });
+  return runCheckCycle({ trigger: 'manual' });
 }
 
 async function openOrFocusNotificationTarget(notificationId) {
@@ -80,19 +60,16 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
   chrome.runtime.onInstalled.addListener(async (details) => {
     await logger.info('lifecycle', `Extension ${details.reason}`);
     await getSettings();
-    await syncAlarmSchedule();
-    await runCheckCycle({ trigger: `install:${details.reason}` });
+    await syncScheduleOnStartup();
   });
 
   chrome.runtime.onStartup.addListener(async () => {
-    await logger.info('lifecycle', 'Browser startup catch-up check');
-    await syncAlarmSchedule();
-    await runCheckCycle({ trigger: 'startup' });
+    await logger.info('lifecycle', 'Browser startup schedule check');
+    await syncScheduleOnStartup();
   });
 
   chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name !== CHECK_ALARM_NAME) return;
-    await syncAlarmSchedule();
     await runCheckCycle({ trigger: 'alarm' });
   });
 
@@ -120,7 +97,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
     const handle = async () => {
       switch (message?.type) {
         case 'CLAIMIT_RUN_CHECK':
-          return runCheckCycle({ trigger: 'manual' });
+          return runManualCheck();
 
         case 'CLAIMIT_CLAIM_ONE':
           return claimSingleOffer(message.store, message.id);
@@ -134,9 +111,6 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
           await logger.info('engine', paused ? 'Automation paused' : 'Automation resumed');
           return { paused: updated.paused };
         }
-
-        case 'CLAIMIT_RESCHEDULE':
-          return { periodInMinutes: await syncAlarmSchedule() };
 
         case 'CLAIMIT_CLEAR_HISTORY':
           await clearHistory();

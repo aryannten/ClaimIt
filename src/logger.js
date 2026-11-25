@@ -1,8 +1,8 @@
 /**
- * Structured ring-buffer logger backed by chrome.storage.local (last 200 entries).
+ * Structured ring-buffer logger backed by chrome.storage.local (last 50 entries).
  */
 
-const MAX_LOG_ENTRIES = 200;
+const MAX_LOG_ENTRIES = 50;
 const LOG_STORAGE_KEY = 'claimit_logs';
 
 /**

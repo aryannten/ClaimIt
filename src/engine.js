@@ -30,6 +30,7 @@ import {
   normalizeCurrencyCode,
   normalizeCountryCode
 } from './currency.js';
+import { scheduleNextScan } from './scheduler.js';
 import { notifyOfferOutcome } from './notifications.js';
 import { logger } from './logger.js';
 
@@ -171,6 +172,8 @@ async function runCheckCycleInternal(options = {}) {
   const saveCurrentOffersFn = deps.setCurrentOffers || setCurrentOffers;
   const loadCurrentOffersFn = deps.getCurrentOffers || getCurrentOffers;
   const updateMetaFn = deps.updateMeta || updateMeta;
+  const loadMetaFn = deps.getMeta || getMeta;
+  const scheduleFn = deps.scheduleNextScan || scheduleNextScan;
   const acquireLockFn = deps.acquireCycleLock || acquireCycleLock;
   const releaseLockFn = deps.releaseCycleLock || releaseCycleLock;
   const timeoutMs = deps.claimTimeoutMs || CLAIM_TIMEOUT_MS;
@@ -180,14 +183,19 @@ async function runCheckCycleInternal(options = {}) {
   const settings = await loadSettings();
   if (settings.paused) {
     await logger.info('engine', `Skipped ${trigger} cycle because automation is paused`);
-    return { skipped: true, reason: 'paused', offers: await loadCurrentOffersFn() };
+    const existingOffers = await loadCurrentOffersFn();
+    if (trigger !== 'manual') {
+      const nowMs = Date.now();
+      await scheduleFn({ lastScanMs: nowMs, offers: existingOffers, nowMs });
+    }
+    return { skipped: true, reason: 'paused', offers: existingOffers, newOffersCount: 0 };
   }
 
   const cycleId = `cycle-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const acquired = await acquireLockFn(cycleId);
   if (!acquired) {
     await logger.info('engine', `Skipped ${trigger} cycle because another check is already running`);
-    return { skipped: true, reason: 'locked', offers: await loadCurrentOffersFn() };
+    return { skipped: true, reason: 'locked', offers: await loadCurrentOffersFn(), newOffersCount: 0 };
   }
 
   const cycleController = new AbortController();
@@ -200,6 +208,7 @@ async function runCheckCycleInternal(options = {}) {
 
   const snapshotOffers = [];
   let claimsAttempted = 0;
+  let newOffersCount = 0;
 
   try {
     const { config, source } = await loadConfig({ forceRefresh: Boolean(options.forceConfigRefresh) });
@@ -308,6 +317,7 @@ async function runCheckCycleInternal(options = {}) {
         }
 
         // 3. Auto-claim vs Notify-only mode
+        newOffersCount += 1;
         if (storeCfg.mode !== 'auto') {
           const reason = 'Auto-claim disabled for store (Notify only)';
           await upsertHistoryFn(buildOfferSnapshot(offer, CLAIM_STATUS.NEEDS_USER, reason));
@@ -379,14 +389,29 @@ async function runCheckCycleInternal(options = {}) {
       }
     }
 
+    const finishedMs = typeof deps.nowMs === 'function' ? deps.nowMs() : Date.now();
+    const finishedIso = new Date(finishedMs).toISOString();
     await saveCurrentOffersFn(snapshotOffers);
-    await updateMetaFn({
-      isChecking: false,
-      lastCheckedAt: new Date().toISOString(),
-      lastCycleId: cycleId
-    });
+    const metaBefore = await loadMetaFn();
+    const shouldReschedule =
+      trigger !== 'manual' ||
+      newOffersCount > 0 ||
+      !metaBefore?.nextScanAt ||
+      Date.parse(metaBefore.nextScanAt) <= finishedMs;
 
-    return { skipped: false, cycleId, offers: snapshotOffers };
+    if (shouldReschedule) {
+      await updateMetaFn({ isChecking: false, lastCycleId: cycleId });
+      await scheduleFn({ lastScanMs: finishedMs, offers: snapshotOffers, nowMs: finishedMs });
+    } else {
+      await updateMetaFn({
+        isChecking: false,
+        lastScanAt: finishedIso,
+        lastCheckedAt: finishedIso,
+        lastCycleId: cycleId
+      });
+    }
+
+    return { skipped: false, cycleId, offers: snapshotOffers, newOffersCount };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await logger.error('engine', 'Unexpected error during check cycle', { error: msg });

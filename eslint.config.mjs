@@ -73,10 +73,33 @@ export default [
         Intl: 'readonly',
         fetch: 'readonly',
         setTimeout: 'readonly',
-        clearTimeout: 'readonly'
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly'
       }
     },
     rules: baseRules
+  },
+  {
+    files: ['src/background.js', 'src/scheduler.js'],
+    rules: {
+      'no-restricted-globals': ['error', 'setTimeout', 'setInterval'],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "Property[key.name='periodInMinutes']",
+          message: 'Use one-shot { when } alarms instead of periodInMinutes.'
+        },
+        {
+          selector: "Identifier[name='setTimeout']",
+          message: 'Do not use setTimeout in service worker scheduling.'
+        },
+        {
+          selector: "Identifier[name='setInterval']",
+          message: 'Do not use setInterval in service worker scheduling.'
+        }
+      ]
+    }
   },
   {
     files: ['tests/**/*.js'],
