@@ -6,7 +6,22 @@
  */
 
 import { CLAIM_STATUS } from './providers/constants.js';
-import { getNotificationState, setNotificationState, makeOfferKey } from './storage.js';
+import {
+  getNotificationState,
+  setNotificationState,
+  makeOfferKey,
+  getSettings,
+  getRegionState,
+  getCachedFxRates,
+  setCachedFxRates
+} from './storage.js';
+import {
+  resolveRegionAndCurrency,
+  getExchangeRates,
+  formatOfferPriceState,
+  formatLocalDateTime,
+  normalizeCurrencyCode
+} from './currency.js';
 import { logger } from './logger.js';
 
 const TARGETS_STORAGE_KEY = 'claimit_notification_targets';
@@ -167,12 +182,15 @@ async function createChromeNotification(notificationId, options, coverDataUrl) {
   });
 }
 
-function formatUntilLabel(endDate) {
-  if (!endDate) return '';
-  const ts = Date.parse(endDate);
-  if (!Number.isFinite(ts)) return '';
-  const formatted = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(ts));
-  return ` until ${formatted}`;
+function formatUntilLabel(endDate, locale) {
+  const formatted = formatLocalDateTime(endDate, locale);
+  return formatted ? ` until ${formatted}` : '';
+}
+
+function formatPriceBadgeText(offer, currencyContext) {
+  const priceState = formatOfferPriceState(offer, currencyContext);
+  if (!priceState.available) return '';
+  return priceState.approx ? `~${priceState.formatted}` : priceState.formatted;
 }
 
 /**
@@ -180,17 +198,26 @@ function formatUntilLabel(endDate) {
  * @param {object} offer
  * @param {string} status
  * @param {string} [reason]
+ * @param {string} [chatId]
+ * @param {{ displayCurrency?: string, locale?: string, rates?: Record<string, number>|null }} [currencyContext]
  * @returns {object}
  */
-export function buildTelegramPayload(offer, status, reason, chatId) {
+export function buildTelegramPayload(offer, status, reason, chatId, currencyContext = null) {
   const storeName = offer.storeName || offer.store;
   const dlcTag = offer.label === 'DLC' ? ' [DLC]' : '';
-  const until = formatUntilLabel(offer.endDate);
-  const priceNote = offer.originalPriceFormatted ? ` (normally ${offer.originalPriceFormatted})` : '';
+  const effectiveCtx = currencyContext || (() => {
+    const resolved = resolveRegionAndCurrency({
+      storedRegion: { storeCurrency: offer.currencyCode || offer.currency || null }
+    });
+    return { displayCurrency: resolved.currency, locale: resolved.locale, rates: null };
+  })();
+  const until = formatUntilLabel(offer.endDate, effectiveCtx.locale);
+  const priceLabel = formatPriceBadgeText(offer, effectiveCtx);
+  const priceNote = priceLabel ? ` (normally ${priceLabel})` : '';
   const text =
     status === CLAIM_STATUS.NEEDS_USER
       ? `${offer.title}${dlcTag}: Free on ${storeName}${until}${priceNote}. ${reason || 'Needs you to claim.'}\n${offer.url}`
-      : `ClaimIt failed on ${storeName} for ${offer.title}${dlcTag}. Reason: ${reason || 'Unknown error'}.\n${offer.url}`;
+      : `ClaimIt failed on ${storeName} for ${offer.title}${dlcTag}${priceNote}. Reason: ${reason || 'Unknown error'}.\n${offer.url}`;
 
   const payload = {
     chat_id: chatId,
@@ -211,12 +238,21 @@ export function buildTelegramPayload(offer, status, reason, chatId) {
  * @param {object} offer
  * @param {string} status
  * @param {string} [reason]
+ * @param {{ displayCurrency?: string, locale?: string, rates?: Record<string, number>|null }} [currencyContext]
  * @returns {object}
  */
-export function buildDiscordPayload(offer, status, reason) {
+export function buildDiscordPayload(offer, status, reason, currencyContext = null) {
   const storeName = offer.storeName || offer.store;
   const dlcTag = offer.label === 'DLC' ? ' [DLC]' : '';
-  const until = formatUntilLabel(offer.endDate);
+  const effectiveCtx = currencyContext || (() => {
+    const resolved = resolveRegionAndCurrency({
+      storedRegion: { storeCurrency: offer.currencyCode || offer.currency || null }
+    });
+    return { displayCurrency: resolved.currency, locale: resolved.locale, rates: null };
+  })();
+  const until = formatUntilLabel(offer.endDate, effectiveCtx.locale);
+  const priceLabel = formatPriceBadgeText(offer, effectiveCtx);
+  const priceNote = priceLabel ? ` (normally ${priceLabel})` : '';
   const isNeedsUser = status === CLAIM_STATUS.NEEDS_USER;
 
   return {
@@ -226,8 +262,8 @@ export function buildDiscordPayload(offer, status, reason) {
         title: `${offer.title}${dlcTag}`,
         url: offer.url,
         description: isNeedsUser
-          ? `Free on ${storeName}${until}. ${reason || 'Needs you to claim.'}`
-          : `Could not claim on ${storeName}. Reason: ${reason || 'Unknown error'}.`,
+          ? `Free on ${storeName}${until}${priceNote}. ${reason || 'Needs you to claim.'}`
+          : `Could not claim on ${storeName}${priceNote}. Reason: ${reason || 'Unknown error'}.`,
         color: isNeedsUser ? 0x16a34a : 0xdc2626,
         thumbnail: offer.image ? { url: offer.image } : undefined,
         footer: { text: `ClaimIt · ${storeName}` },
@@ -237,10 +273,10 @@ export function buildDiscordPayload(offer, status, reason) {
   };
 }
 
-async function sendTelegramAlert(telegramCfg, offer, status, reason) {
+async function sendTelegramAlert(telegramCfg, offer, status, reason, currencyContext) {
   if (!telegramCfg?.enabled || !telegramCfg.botToken || !telegramCfg.chatId) return;
   const url = `https://api.telegram.org/bot${encodeURIComponent(telegramCfg.botToken.trim())}/sendMessage`;
-  const payload = buildTelegramPayload(offer, status, reason, telegramCfg.chatId.trim());
+  const payload = buildTelegramPayload(offer, status, reason, telegramCfg.chatId.trim(), currencyContext);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
@@ -259,13 +295,13 @@ async function sendTelegramAlert(telegramCfg, offer, status, reason) {
   }
 }
 
-async function sendDiscordAlert(discordCfg, offer, status, reason) {
+async function sendDiscordAlert(discordCfg, offer, status, reason, currencyContext) {
   if (!discordCfg?.enabled || !discordCfg.webhookUrl) return;
   const url = discordCfg.webhookUrl.trim();
   if (!url.startsWith('https://')) {
     throw new Error('Discord webhook URL must use https://');
   }
-  const payload = buildDiscordPayload(offer, status, reason);
+  const payload = buildDiscordPayload(offer, status, reason, currencyContext);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
@@ -288,19 +324,25 @@ async function sendDiscordAlert(discordCfg, offer, status, reason) {
  * Send a test notification to Telegram or Discord from the Options page.
  */
 export async function sendTestWebhook(channel, config) {
+  const settings = await getSettings();
+  const storedRegion = await getRegionState();
+  const region = resolveRegionAndCurrency({ settings, storedRegion });
   const sampleOffer = {
     id: 'test-offer',
     store: 'epic',
     storeName: 'Epic Games Store',
     title: 'ClaimIt Test Alert',
     url: 'https://store.epicgames.com/en-US/free-games',
-    originalPriceFormatted: '$19.99',
+    originalPrice: 499,
+    originalPriceValue: 499,
+    currencyCode: region.currency,
     label: null
   };
+  const currencyContext = { displayCurrency: region.currency, locale: region.locale, rates: null };
   if (channel === 'telegram') {
-    await sendTelegramAlert(config, sampleOffer, CLAIM_STATUS.NEEDS_USER, 'Test notification');
+    await sendTelegramAlert(config, sampleOffer, CLAIM_STATUS.NEEDS_USER, 'Test notification', currencyContext);
   } else if (channel === 'discord') {
-    await sendDiscordAlert(config, sampleOffer, CLAIM_STATUS.NEEDS_USER, 'Test notification');
+    await sendDiscordAlert(config, sampleOffer, CLAIM_STATUS.NEEDS_USER, 'Test notification', currencyContext);
   } else {
     throw new Error(`Unknown notification channel: ${channel}`);
   }
@@ -344,10 +386,28 @@ export async function notifyOfferOutcome({
 
   const storeName = offer.storeName || offer.store;
   const dlcTag = offer.label === 'DLC' ? ' (DLC)' : '';
-  const pricePart = offer.originalPriceFormatted ? ` (${offer.originalPriceFormatted})` : '';
+  const storedRegion = await getRegionState();
+  const effectiveSettings = settings || (await getSettings());
+  const region = resolveRegionAndCurrency({ settings: effectiveSettings, storedRegion });
+  const offerCur = normalizeCurrencyCode(offer.currencyCode ?? offer.currency);
+  let fxRates = null;
+  if (offerCur && offerCur !== region.currency) {
+    const fxResult = await getExchangeRates({
+      cached: await getCachedFxRates(),
+      saveCacheFn: setCachedFxRates
+    }).catch(() => null);
+    fxRates = fxResult?.rates || null;
+  }
+  const currencyContext = {
+    displayCurrency: region.currency,
+    locale: region.locale,
+    rates: fxRates
+  };
+  const priceLabel = formatPriceBadgeText(offer, currencyContext);
+  const pricePart = priceLabel ? ` (normally ${priceLabel})` : '';
 
   // Chrome Notifications
-  if (settings?.notifications?.chrome !== false && typeof chrome !== 'undefined' && chrome.notifications) {
+  if (effectiveSettings?.notifications?.chrome !== false && typeof chrome !== 'undefined' && chrome.notifications) {
     notificationSeq += 1;
     const notificationId = `claimit:${key}:${Date.now()}-${notificationSeq}`;
     await saveNotificationTarget(notificationId, {
@@ -360,7 +420,7 @@ export async function notifyOfferOutcome({
     const coverDataUrl = await fetchCoverDataUrl(offer.image);
 
     try {
-      const until = formatUntilLabel(offer.endDate);
+      const until = formatUntilLabel(offer.endDate, region.locale);
       if (status === CLAIM_STATUS.CLAIMED) {
         const title = dryRun ? `Dry-run: ${offer.title}${dlcTag}` : `${offer.title}${dlcTag}`;
         const message = dryRun
@@ -384,7 +444,7 @@ export async function notifyOfferOutcome({
           notificationId,
           {
             title: `${offer.title}${dlcTag}`,
-            message: `Free on ${storeName}${until}. ${reason ? `${reason}. ` : ''}Needs you to claim.`,
+            message: `Free on ${storeName}${until}${pricePart}. ${reason ? `${reason}. ` : ''}Needs you to claim.`,
             contextMessage: storeName,
             buttons: [{ title: 'Claim now' }, { title: 'Dismiss' }],
             requireInteraction: true,
@@ -397,7 +457,7 @@ export async function notifyOfferOutcome({
           notificationId,
           {
             title: `${offer.title}${dlcTag}`,
-            message: `Could not claim on ${storeName}: ${reason || 'Unknown error'}.`,
+            message: `Could not claim on ${storeName}${pricePart}: ${reason || 'Unknown error'}.`,
             contextMessage: storeName,
             buttons: [{ title: 'Claim now' }, { title: 'Dismiss' }],
             requireInteraction: false,
@@ -417,7 +477,7 @@ export async function notifyOfferOutcome({
   // External alerts (Telegram & Discord) for NEEDS_USER and FAILED
   if (status === CLAIM_STATUS.NEEDS_USER || status === CLAIM_STATUS.FAILED) {
     try {
-      await sendTelegramAlert(settings?.notifications?.telegram, offer, status, reason);
+      await sendTelegramAlert(effectiveSettings?.notifications?.telegram, offer, status, reason, currencyContext);
     } catch (err) {
       await logger.warn('notifications', 'Telegram alert failed', {
         key,
@@ -426,7 +486,7 @@ export async function notifyOfferOutcome({
     }
 
     try {
-      await sendDiscordAlert(settings?.notifications?.discord, offer, status, reason);
+      await sendDiscordAlert(effectiveSettings?.notifications?.discord, offer, status, reason, currencyContext);
     } catch (err) {
       await logger.warn('notifications', 'Discord alert failed', {
         key,

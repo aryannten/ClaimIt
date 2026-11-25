@@ -1,8 +1,16 @@
 /**
  * Persistent storage layer built on chrome.storage.local.
  * Stores settings, claim history, current cycle offer snapshot, notification dedup state,
- * and cached remote config. Never stores store credentials or passwords.
+ * region resolution state, 24h FX rate cache, and cached remote config.
+ * Never stores store credentials or passwords.
  */
+
+import {
+  DEFAULT_FALLBACK_CURRENCY,
+  convertAmount,
+  normalizeCountryCode,
+  normalizeCurrencyCode
+} from './currency.js';
 
 export const STORAGE_KEYS = {
   SETTINGS: 'claimit_settings',
@@ -11,7 +19,9 @@ export const STORAGE_KEYS = {
   META: 'claimit_meta',
   CYCLE_LOCK: 'claimit_cycle_lock',
   REMOTE_CONFIG_CACHE: 'claimit_remote_config_cache',
-  NOTIFICATION_STATE: 'claimit_notification_state'
+  NOTIFICATION_STATE: 'claimit_notification_state',
+  REGION: 'claimit_region',
+  FX_RATES: 'claimit_fx_rates'
 };
 
 const CYCLE_LOCK_TTL_MS = 5 * 60 * 1000;
@@ -25,6 +35,7 @@ const DEFAULT_SETTINGS = {
   dryRun: false,
   checkIntervalHours: 6,
   thursdayFridayHourlyBoost: true,
+  currency: 'auto',
   remoteConfigUrl: '',
   stores: {
     epic: { enabled: true, mode: 'auto' },
@@ -85,37 +96,151 @@ export function makeOfferKey(store, id) {
 }
 
 /**
- * Pure helper to calculate total saved value across newly claimed items.
- * Skips dry-run entries and pre-owned library games (`alreadyOwned: true`).
+ * Pure migration helper for legacy history entries saved before currency tracking.
+ * Preserves existing ISO codes and marks entries with no currency code cleanly as unknown
+ * without guessing or crashing.
  * @param {Record<string, object>} historyMap
- * @returns {{ totalMajor: number, count: number, currency: string, totalsByCurrency: Record<string, number> }}
+ * @returns {{ history: Record<string, object>, changed: boolean }}
  */
-export function computeValueSaved(historyMap) {
+export function migrateHistoryEntries(historyMap) {
+  if (!historyMap || typeof historyMap !== 'object') {
+    return { history: {}, changed: false };
+  }
+  const next = {};
+  let changed = false;
+
+  for (const [key, item] of Object.entries(historyMap)) {
+    if (!item || typeof item !== 'object') continue;
+    const resolvedCode = normalizeCurrencyCode(item.currencyCode ?? item.currency);
+
+    if (resolvedCode) {
+      const needsSync =
+        item.currencyCode !== resolvedCode ||
+        item.currency !== resolvedCode ||
+        item.priceSource === undefined ||
+        item.unknownCurrency === true;
+      if (needsSync) {
+        changed = true;
+        next[key] = {
+          ...item,
+          currencyCode: resolvedCode,
+          currency: resolvedCode,
+          priceSource: item.priceSource || 'store',
+          unknownCurrency: false
+        };
+      } else {
+        next[key] = item;
+      }
+    } else {
+      const needsLegacyMark =
+        item.unknownCurrency !== true ||
+        item.currencyCode !== null ||
+        item.currency !== null ||
+        item.priceSource !== 'legacy';
+      if (needsLegacyMark) {
+        changed = true;
+        next[key] = {
+          ...item,
+          currencyCode: null,
+          currency: null,
+          unknownCurrency: true,
+          priceSource: item.priceSource || 'legacy'
+        };
+      } else {
+        next[key] = item;
+      }
+    }
+  }
+
+  return { history: next, changed };
+}
+
+/**
+ * Pure helper to calculate total saved value across newly claimed items.
+ * Never mixes currencies: stores per-currency totals cleanly and converts into
+ * `displayCurrency` when provided (keeping unconvertible currencies separated).
+ * Skips dry-run entries, pre-owned library games, missing/zero prices, and unknown-currency legacy rows.
+ *
+ * @param {Record<string, object>} historyMap
+ * @param {string|null} [displayCurrency=null]
+ * @param {Record<string, number>|null} [fxRates=null]
+ */
+export function computeValueSaved(historyMap, displayCurrency = null, fxRates = null) {
   const items = Object.values(historyMap || {});
   const totalsByCurrency = {};
   let count = 0;
+  let valuedCount = 0;
+  let unknownCurrencyCount = 0;
 
   for (const item of items) {
     if (!item || item.status !== 'CLAIMED' || item.dryRun === true || item.alreadyOwned === true) {
       continue;
     }
     count += 1;
-    const cur = item.currency || 'USD';
     const price = Number(item.originalPriceValue ?? item.originalPrice ?? 0);
-    if (Number.isFinite(price) && price > 0) {
-      totalsByCurrency[cur] = Math.round(((totalsByCurrency[cur] || 0) + price) * 100) / 100;
+    if (!Number.isFinite(price) || price <= 0) {
+      continue;
     }
+    const cur = normalizeCurrencyCode(item.currencyCode ?? item.currency);
+    if (!cur || item.unknownCurrency === true) {
+      unknownCurrencyCount += 1;
+      continue;
+    }
+    valuedCount += 1;
+    totalsByCurrency[cur] = Math.round(((totalsByCurrency[cur] || 0) + price) * 1000) / 1000;
+  }
+
+  const targetCurrency = normalizeCurrencyCode(displayCurrency);
+  if (targetCurrency) {
+    let totalMajor = 0;
+    let hasConverted = false;
+    const sourceCurrencies = [];
+    const unconvertedTotals = {};
+
+    for (const [cur, amt] of Object.entries(totalsByCurrency)) {
+      if (cur === targetCurrency) {
+        totalMajor += amt;
+        continue;
+      }
+      const converted = convertAmount(amt, cur, targetCurrency, fxRates);
+      if (converted) {
+        totalMajor += converted.amount;
+        hasConverted = true;
+        sourceCurrencies.push(cur);
+      } else {
+        unconvertedTotals[cur] = amt;
+      }
+    }
+
+    return {
+      totalMajor: Math.round(totalMajor * 1000) / 1000,
+      count,
+      valuedCount,
+      unknownCurrencyCount,
+      currency: targetCurrency,
+      totalsByCurrency,
+      unconvertedTotals,
+      hasConverted,
+      sourceCurrencies
+    };
   }
 
   const currencies = Object.keys(totalsByCurrency);
-  const currency = currencies.includes('USD') ? 'USD' : (currencies[0] || 'USD');
+  const currency = currencies.includes(DEFAULT_FALLBACK_CURRENCY)
+    ? DEFAULT_FALLBACK_CURRENCY
+    : (currencies[0] || DEFAULT_FALLBACK_CURRENCY);
   const totalMajor = totalsByCurrency[currency] || 0;
 
   return {
     totalMajor,
     count,
+    valuedCount,
+    unknownCurrencyCount,
     currency,
-    totalsByCurrency
+    totalsByCurrency,
+    unconvertedTotals: {},
+    hasConverted: false,
+    sourceCurrencies: []
   };
 }
 
@@ -155,10 +280,28 @@ export async function saveSettings(partial) {
 
 export async function getHistory() {
   if (!hasChromeStorage()) return {};
-  const data = await chrome.storage.local.get(STORAGE_KEYS.HISTORY);
-  return data[STORAGE_KEYS.HISTORY] && typeof data[STORAGE_KEYS.HISTORY] === 'object'
+  const data = await chrome.storage.local.get([STORAGE_KEYS.HISTORY, STORAGE_KEYS.META]);
+  const rawHistory = data[STORAGE_KEYS.HISTORY] && typeof data[STORAGE_KEYS.HISTORY] === 'object'
     ? data[STORAGE_KEYS.HISTORY]
     : {};
+  const meta = data[STORAGE_KEYS.META] && typeof data[STORAGE_KEYS.META] === 'object'
+    ? data[STORAGE_KEYS.META]
+    : {};
+
+  if (!meta.historyCurrencyMigrated && Object.keys(rawHistory).length > 0) {
+    const { history, changed } = migrateHistoryEntries(rawHistory);
+    if (changed) {
+      await chrome.storage.local.set({
+        [STORAGE_KEYS.HISTORY]: history,
+        [STORAGE_KEYS.META]: { ...meta, historyCurrencyMigrated: true }
+      });
+      return history;
+    }
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.META]: { ...meta, historyCurrencyMigrated: true }
+    });
+  }
+  return rawHistory;
 }
 
 export async function upsertHistoryEntry(entry) {
@@ -276,4 +419,48 @@ export async function getCachedRemoteConfig() {
 export async function setCachedRemoteConfig(payload) {
   if (!hasChromeStorage()) return;
   await chrome.storage.local.set({ [STORAGE_KEYS.REMOTE_CONFIG_CACHE]: payload });
+}
+
+export async function getRegionState() {
+  if (!hasChromeStorage()) return { storeCountry: null, storeCurrency: null, updatedAt: null };
+  const data = await chrome.storage.local.get(STORAGE_KEYS.REGION);
+  const raw = data[STORAGE_KEYS.REGION];
+  return raw && typeof raw === 'object'
+    ? {
+        storeCountry: normalizeCountryCode(raw.storeCountry),
+        storeCurrency: normalizeCurrencyCode(raw.storeCurrency),
+        updatedAt: raw.updatedAt || null
+      }
+    : { storeCountry: null, storeCurrency: null, updatedAt: null };
+}
+
+export async function saveRegionState(partial = {}) {
+  const current = await getRegionState();
+  const next = {
+    storeCountry:
+      partial.storeCountry !== undefined
+        ? normalizeCountryCode(partial.storeCountry)
+        : current.storeCountry,
+    storeCurrency:
+      partial.storeCurrency !== undefined
+        ? normalizeCurrencyCode(partial.storeCurrency)
+        : current.storeCurrency,
+    updatedAt: new Date().toISOString()
+  };
+  if (hasChromeStorage()) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.REGION]: next });
+  }
+  return next;
+}
+
+export async function getCachedFxRates() {
+  if (!hasChromeStorage()) return null;
+  const data = await chrome.storage.local.get(STORAGE_KEYS.FX_RATES);
+  const raw = data[STORAGE_KEYS.FX_RATES];
+  return raw && typeof raw === 'object' && raw.rates ? raw : null;
+}
+
+export async function setCachedFxRates(payload) {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.set({ [STORAGE_KEYS.FX_RATES]: payload });
 }

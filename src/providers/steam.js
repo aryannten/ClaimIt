@@ -7,6 +7,12 @@
 
 import { CLAIM_STATUS, delay, humanDelay } from './constants.js';
 import {
+  inferCurrencyFromCountry,
+  inferCurrencyFromFormatted,
+  normalizeCountryCode,
+  normalizeCurrencyCode
+} from '../currency.js';
+import {
   openBackgroundTab,
   focusTab,
   closeTabSafely,
@@ -42,7 +48,7 @@ function decodeHtmlEntities(str) {
 }
 
 /**
- * Parse a price string like "$19.99", "₹ 1,299.00", or "14,99€" into numeric major units.
+ * Parse a formatted store price string (with comma or dot decimals) into numeric major units.
  * @param {string} priceText
  * @returns {number}
  */
@@ -70,12 +76,14 @@ function parsePriceText(priceText) {
  * without DOM APIs so it works inside MV3 service workers and Node unit tests.
  * @param {string} resultsHtml
  * @param {object} [endpoints]
+ * @param {{ country?: string|null }} [options]
  * @returns {object[]}
  */
-export function parseSteamSearchHtml(resultsHtml, endpoints = {}) {
+export function parseSteamSearchHtml(resultsHtml, endpoints = {}, options = {}) {
   const html = String(resultsHtml || '');
   if (!html) return [];
 
+  const country = normalizeCountryCode(options.country);
   const appBase = endpoints.appBase || 'https://store.steampowered.com/app/';
   const rowRegex = /<a\b([^>]*class="[^"]*search_result_row[^"]*"[^>]*)>([\s\S]*?)<\/a>/gi;
   const offers = [];
@@ -119,6 +127,9 @@ export function parseSteamSearchHtml(resultsHtml, endpoints = {}) {
     const rawUrl = hrefMatch ? decodeHtmlEntities(hrefMatch[1]) : `${appBase}${appId}/`;
     const cleanUrl = rawUrl.split('?')[0];
     const hasFreeWeekendHint = /free\s+weekend|play\s+for\s+free/i.test(body);
+    const currencyCode = origFormatted
+      ? inferCurrencyFromFormatted(origFormatted, country)
+      : inferCurrencyFromCountry(country);
 
     offers.push({
       id: appId,
@@ -128,10 +139,13 @@ export function parseSteamSearchHtml(resultsHtml, endpoints = {}) {
       url: cleanUrl,
       image: imgMatch ? decodeHtmlEntities(imgMatch[1]) : '',
       originalPrice,
-      originalPriceFormatted: origFormatted || (originalPrice > 0 ? `$${originalPrice.toFixed(2)}` : '$0.00'),
+      originalPriceFormatted: origFormatted,
       discountPrice,
       discountPercent,
-      currency: 'USD',
+      currencyCode,
+      currency: currencyCode,
+      country,
+      priceSource: 'store',
       startDate: null,
       endDate: null,
       type: 'game',
@@ -179,7 +193,10 @@ export function parseSteamDbFreeHtml(html) {
       originalPriceFormatted: '',
       discountPrice: 0,
       discountPercent: isKeep ? 100 : 0,
-      currency: 'USD',
+      currencyCode: null,
+      currency: null,
+      country: null,
+      priceSource: 'store',
       startDate: null,
       endDate: endIso,
       type: 'game',
@@ -195,18 +212,41 @@ export function parseSteamDbFreeHtml(html) {
 
 /**
  * Enrich candidate Steam offers using Steam's public appdetails endpoint so DLC,
- * demos, and permanent free-to-play titles are classified accurately.
+ * demos, regional prices (`cc`), and region locks are classified accurately.
+ * Note: Steam `appdetails` always returns `price_overview.initial` / `final` scaled by 100
+ * (even for zero-decimal currencies such as JPY).
  * @param {object} offer
+ * @param {string|null} [country=null]
  * @returns {Promise<object>}
  */
-async function enrichFromAppDetails(offer) {
+async function enrichFromAppDetails(offer, country = null) {
+  const cc = normalizeCountryCode(country);
   try {
-    const url = `https://store.steampowered.com/api/appdetails?appids=${encodeURIComponent(offer.id)}&l=english`;
-    const resp = await fetch(url, { method: 'GET', cache: 'no-store' });
+    const url = new URL('https://store.steampowered.com/api/appdetails');
+    url.searchParams.set('appids', String(offer.id));
+    url.searchParams.set('l', 'english');
+    if (cc) {
+      url.searchParams.set('cc', cc);
+    }
+
+    const resp = await fetch(url.href, { method: 'GET', cache: 'no-store' });
     if (!resp.ok) return offer;
     const json = await resp.json();
     const detail = json?.[offer.id];
-    if (!detail?.success || !detail?.data) return offer;
+    if (detail && detail.success === false) {
+      const regionCurrency = inferCurrencyFromCountry(cc) || offer.currencyCode || null;
+      return {
+        ...offer,
+        originalPrice: 0,
+        originalPriceFormatted: '',
+        currencyCode: regionCurrency,
+        currency: regionCurrency,
+        country: cc || offer.country || null,
+        priceSource: 'store',
+        regionUnavailable: true
+      };
+    }
+    if (!detail?.data) return offer;
 
     const data = detail.data;
     const rawType = String(data.type || 'game').toLowerCase();
@@ -214,13 +254,18 @@ async function enrichFromAppDetails(offer) {
 
     const originalPrice = priceOverview
       ? Number(priceOverview.initial ?? 0) / 100
-      : offer.originalPrice;
+      : 0;
     const discountPrice = priceOverview
       ? Number(priceOverview.final ?? 0) / 100
       : offer.discountPrice;
     const discountPercent = priceOverview
       ? Number(priceOverview.discount_percent ?? offer.discountPercent)
-      : 0;
+      : offer.discountPercent;
+    const currencyCode =
+      normalizeCurrencyCode(priceOverview?.currency) ||
+      inferCurrencyFromCountry(cc) ||
+      offer.currencyCode ||
+      null;
 
     return {
       ...offer,
@@ -235,11 +280,14 @@ async function enrichFromAppDetails(offer) {
       originalPrice,
       originalPriceFormatted:
         priceOverview?.initial_formatted ||
-        offer.originalPriceFormatted ||
-        (originalPrice > 0 ? `$${originalPrice.toFixed(2)}` : '$0.00'),
+        priceOverview?.final_formatted ||
+        (originalPrice > 0 ? offer.originalPriceFormatted : ''),
       discountPrice,
       discountPercent,
-      currency: priceOverview?.currency || offer.currency || 'USD',
+      currencyCode,
+      currency: currencyCode,
+      country: cc || offer.country || null,
+      priceSource: 'store',
       isLimitedTime: discountPercent === 100 && originalPrice > 0
     };
   } catch {
@@ -250,12 +298,17 @@ async function enrichFromAppDetails(offer) {
 /**
  * Built-in Steam Store search source adapter.
  */
-async function fetchFromSteamSearch(endpoints) {
-  const url =
+async function fetchFromSteamSearch(endpoints, region = null) {
+  const country = normalizeCountryCode(region?.country);
+  const url = new URL(
     endpoints.searchResults ||
-    'https://store.steampowered.com/search/results/?query=&maxprice=free&specials=1&infinite=1&json=1';
+      'https://store.steampowered.com/search/results/?query=&maxprice=free&specials=1&infinite=1&json=1'
+  );
+  if (country) {
+    url.searchParams.set('cc', country);
+  }
 
-  const resp = await fetch(url, {
+  const resp = await fetch(url.href, {
     method: 'GET',
     headers: { Accept: 'application/json' },
     credentials: 'include',
@@ -266,13 +319,13 @@ async function fetchFromSteamSearch(endpoints) {
   }
 
   const payload = await resp.json();
-  const candidates = parseSteamSearchHtml(payload?.results_html || '', endpoints);
+  const candidates = parseSteamSearchHtml(payload?.results_html || '', endpoints, { country });
 
   // Only enrich candidates that look like 100% free promos to minimize API calls
   const enriched = [];
   for (const candidate of candidates) {
     if (candidate.discountPercent === 100 || candidate.discountPrice === 0) {
-      enriched.push(await enrichFromAppDetails(candidate));
+      enriched.push(await enrichFromAppDetails(candidate, country));
     } else {
       enriched.push(candidate);
     }
@@ -322,7 +375,7 @@ export async function fetchOffers(context = {}) {
   if (!fetcher) {
     throw new Error(`Unknown Steam source: ${sourceKey}`);
   }
-  return fetcher(endpoints);
+  return fetcher(endpoints, context.region || null);
 }
 
 /**
@@ -373,6 +426,10 @@ export async function claim(offer, context = {}) {
   const steamCfg = context.config?.stores?.steam || {};
   const dryRun = Boolean(context.dryRun);
   const signal = context.signal;
+
+  if (offer?.regionUnavailable) {
+    return { status: CLAIM_STATUS.NEEDS_USER, reason: 'Not available in your region' };
+  }
 
   let tab = null;
   let keepTabOpen = false;
@@ -442,7 +499,7 @@ export async function claim(offer, context = {}) {
     }
 
     if (state.unavailable) {
-      return await handoffToUser('Unavailable in your region');
+      return await handoffToUser('Not available in your region');
     }
     if (state.owned) {
       return {

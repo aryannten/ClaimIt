@@ -280,7 +280,7 @@ test('Mocked chrome.* background cycles cover CLAIMED, NEEDS_USER, FAILED, notif
     const lastNotif = createdNotifications.at(-1);
     assert.equal(lastNotif.options.requireInteraction, true);
     assert.equal(lastNotif.options.title, 'Captcha Game');
-    assert.match(lastNotif.options.message, /Free on Epic Games Store\. Captcha required/);
+    assert.match(lastNotif.options.message, /Free on Epic Games Store.*\$19\.99.*Captcha required/);
     assert.equal(lastNotif.options.buttons[0].title, 'Claim now');
 
     // Same cycle dedup check via notifyOfferOutcome directly

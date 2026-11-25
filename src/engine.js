@@ -18,8 +18,18 @@ import {
   getMeta,
   acquireCycleLock,
   releaseCycleLock,
-  makeOfferKey
+  makeOfferKey,
+  getRegionState,
+  saveRegionState,
+  getCachedFxRates,
+  setCachedFxRates
 } from './storage.js';
+import {
+  resolveRegionAndCurrency,
+  getExchangeRates,
+  normalizeCurrencyCode,
+  normalizeCountryCode
+} from './currency.js';
 import { notifyOfferOutcome } from './notifications.js';
 import { logger } from './logger.js';
 
@@ -104,6 +114,10 @@ export async function executeClaimWithTimeout(provider, offer, context, timeoutM
  * Build a displayable offer entry for Popup's "Free now" tab.
  */
 function buildOfferSnapshot(offer, status, reason = null, extra = {}) {
+  const numericPrice = Number(offer.originalPrice ?? offer.originalPriceValue ?? 0);
+  const cleanPrice = Number.isFinite(numericPrice) && numericPrice > 0 ? numericPrice : 0;
+  const currencyCode = normalizeCurrencyCode(offer.currencyCode ?? offer.currency);
+
   return {
     key: makeOfferKey(offer.store, offer.id),
     id: offer.id,
@@ -114,9 +128,13 @@ function buildOfferSnapshot(offer, status, reason = null, extra = {}) {
     image: offer.image,
     type: offer.type,
     label: offer.label || null,
-    originalPrice: offer.originalPriceFormatted || `$${Number(offer.originalPrice || 0).toFixed(2)}`,
-    originalPriceValue: Number(offer.originalPrice || 0),
-    currency: offer.currency || 'USD',
+    originalPrice: cleanPrice,
+    originalPriceValue: cleanPrice,
+    originalPriceFormatted: offer.originalPriceFormatted || '',
+    currencyCode,
+    currency: currencyCode,
+    country: normalizeCountryCode(offer.country),
+    priceSource: offer.priceSource || 'store',
     endDate: offer.endDate || null,
     status,
     reason,
@@ -189,6 +207,8 @@ async function runCheckCycleInternal(options = {}) {
 
     const providers = getProvidersFn(settings);
     const history = await loadHistory();
+    let storedRegion = await getRegionState();
+    let region = resolveRegionAndCurrency({ settings, storedRegion });
 
     for (const provider of providers) {
       const currentSettings = await loadSettings();
@@ -198,7 +218,8 @@ async function runCheckCycleInternal(options = {}) {
       }
 
       const storeCfg = currentSettings.stores?.[provider.id] || { enabled: true, mode: 'auto' };
-      const providerCtx = { config, settings: currentSettings, history };
+      region = resolveRegionAndCurrency({ settings: currentSettings, storedRegion });
+      const providerCtx = { config, settings: currentSettings, history, region };
 
       let rawOffers = [];
       try {
@@ -209,12 +230,41 @@ async function runCheckCycleInternal(options = {}) {
         continue; // Error isolation: broken store never stops others
       }
 
+      const detectedStoreOffer = (rawOffers || []).find(
+        (o) => normalizeCurrencyCode(o?.currencyCode ?? o?.currency)
+      );
+      if (detectedStoreOffer) {
+        const observedCur = normalizeCurrencyCode(detectedStoreOffer.currencyCode ?? detectedStoreOffer.currency);
+        const observedCountry = normalizeCountryCode(detectedStoreOffer.country) || region.country;
+        if (
+          observedCur &&
+          (observedCur !== storedRegion.storeCurrency || observedCountry !== storedRegion.storeCountry)
+        ) {
+          storedRegion = await saveRegionState({
+            storeCurrency: observedCur,
+            storeCountry: observedCountry
+          });
+          region = resolveRegionAndCurrency({ settings: currentSettings, storedRegion });
+        }
+      }
+
       const { eligible, excluded } = classifyOffers(rawOffers);
       await logger.info('engine', `Provider ${provider.id} fetched offers`, {
         total: rawOffers.length,
         eligible: eligible.length,
         excluded: excluded.map((e) => ({ title: e.offer?.title, reason: e.reason }))
       });
+
+      const needsFx = eligible.some((o) => {
+        const oc = normalizeCurrencyCode(o?.currencyCode ?? o?.currency);
+        return oc && oc !== region.currency;
+      });
+      if (needsFx) {
+        await getExchangeRates({
+          cached: await getCachedFxRates(),
+          saveCacheFn: setCachedFxRates
+        }).catch(() => null);
+      }
 
       for (const offer of eligible) {
         const latestSettings = await loadSettings();

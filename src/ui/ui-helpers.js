@@ -1,3 +1,11 @@
+import {
+  formatPrice,
+  formatLocalDateTime,
+  formatRelativeDuration
+} from '../currency.js';
+
+export { formatPrice, formatLocalDateTime };
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 let illustrationsDocPromise = null;
@@ -52,73 +60,49 @@ export async function createIllustration(symbolId) {
 }
 
 /**
- * Format a numeric amount using Intl.NumberFormat in the given ISO currency.
- * @param {number} amount
- * @param {string} [currency='USD']
- * @returns {string}
- */
-export function formatCurrency(amount, currency = 'USD') {
-  const num = Number(amount);
-  if (!Number.isFinite(num)) return '';
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: currency || 'USD',
-      maximumFractionDigits: 2
-    }).format(num);
-  } catch {
-    return `${currency} ${num.toFixed(2)}`;
-  }
-}
-
-/**
- * Format a future countdown cleanly (e.g., "2d 4h", "45m", or "Ended").
+ * Format a future offer end timestamp using Intl.RelativeTimeFormat and local Intl.DateTimeFormat.
  * @param {string|null|undefined} iso
  * @param {number} [nowMs=Date.now()]
+ * @param {string} [locale]
  * @returns {string}
  */
-export function formatCountdown(iso, nowMs = Date.now()) {
+export function formatCountdown(iso, nowMs = Date.now(), locale) {
   if (!iso) return 'Limited-time';
   const targetMs = Date.parse(iso);
   if (!Number.isFinite(targetMs)) return 'Limited-time';
-  const diffMin = Math.floor((targetMs - nowMs) / 60000);
-  if (diffMin <= 0) return 'Ended';
-  if (diffMin < 60) return `Ends in ${diffMin}m`;
-  const hours = Math.floor(diffMin / 60);
-  if (hours < 24) return `Ends in ${hours}h ${diffMin % 60}m`;
-  const days = Math.floor(hours / 24);
-  return `Ends in ${days}d ${hours % 24}h`;
+  const diffMs = targetMs - nowMs;
+  if (diffMs <= 0) return 'Ended';
+  const rel = formatRelativeDuration(diffMs, locale);
+  const local = formatLocalDateTime(iso, locale, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return local ? `Ends ${rel} (${local})` : `Ends ${rel}`;
 }
 
 /**
- * Format a past elapsed duration calmly (e.g., "Just now", "14 min ago", "2 h ago").
+ * Format a past elapsed timestamp using Intl.RelativeTimeFormat and local date/time.
  * @param {string|null|undefined} iso
  * @param {number} [nowMs=Date.now()]
+ * @param {string} [locale]
  * @returns {string}
  */
-export function formatTimeAgo(iso, nowMs = Date.now()) {
+export function formatTimeAgo(iso, nowMs = Date.now(), locale) {
   if (!iso) return 'Never';
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts)) return 'Unknown';
-  const diffMin = Math.max(0, Math.floor((nowMs - ts) / 60000));
-  if (diffMin < 1) return 'just now';
-  if (diffMin < 60) return `${diffMin} min ago`;
-  const hours = Math.floor(diffMin / 60);
-  if (hours < 24) return `${hours} h ago`;
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(ts));
+  const diffMs = ts - nowMs;
+  if (Math.abs(diffMs) < 60000) return 'just now';
+  if (Math.abs(diffMs) < 86400000) return formatRelativeDuration(diffMs, locale);
+  return formatLocalDateTime(iso, locale, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 /**
- * Format duration until next scheduled check (e.g., "5 h 46 m").
+ * Format next scheduled check duration using Intl.RelativeTimeFormat.
  * @param {number|null|undefined} scheduledMs
  * @param {number} [nowMs=Date.now()]
+ * @param {string} [locale]
  * @returns {string}
  */
-export function formatTimeUntil(scheduledMs, nowMs = Date.now()) {
+export function formatTimeUntil(scheduledMs, nowMs = Date.now(), locale) {
   if (!Number.isFinite(scheduledMs)) return 'unscheduled';
-  const diffMin = Math.max(1, Math.round((scheduledMs - nowMs) / 60000));
-  if (diffMin < 60) return `${diffMin} m`;
-  const hours = Math.floor(diffMin / 60);
-  const mins = diffMin % 60;
-  return mins > 0 ? `${hours} h ${mins} m` : `${hours} h`;
+  const diffMs = Math.max(60000, scheduledMs - nowMs);
+  return formatRelativeDuration(diffMs, locale);
 }

@@ -25,6 +25,25 @@
       <div id="storesList" class="stack-list"></div>
     </section>
 
+    <section class="section" aria-labelledby="sec-region">
+      <div class="section-head">
+        <h1 id="sec-region">Region and currency</h1>
+        <p class="helper">Uses store regional pricing first, with keyless daily exchange-rate conversion only as a fallback.</p>
+      </div>
+      <div class="panel">
+        <div class="control-row">
+          <div class="control-copy">
+            <label for="currencySelect">Currency</label>
+            <p class="helper" id="detectedRegionRow">
+              <span id="detectedRegionText">Detecting region…</span>
+              <button id="changeCurrencyBtn" type="button" class="link-btn">Change</button>
+            </p>
+          </div>
+          <select id="currencySelect" name="currency" class="select select-md"></select>
+        </div>
+      </div>
+    </section>
+
     <section class="section" aria-labelledby="sec-behaviour">
       <div class="section-head">
         <h1 id="sec-behaviour">Behaviour</h1>
@@ -166,6 +185,7 @@
             <li><code>store-site-backend-static-ipv4.ak.epicgames.com</code> &amp; <code>store.epicgames.com</code> / <code>payment-website-pci.ol.epicgames.com</code>: fetch active free promotions and run Epic checkout clicks.</li>
             <li><code>store.steampowered.com</code>: check discounted free offers, library ownership, and Add to Account pages.</li>
             <li><code>raw.githubusercontent.com</code>: optional remote selector JSON updates.</li>
+            <li><code>open.er-api.com</code>: optional keyless exchange-rate fallback cached locally for 24 hours.</li>
             <li><code>alarms</code>, <code>notifications</code>, <code>storage</code>, <code>scripting</code>, <code>tabs</code>: schedule checks, show desktop alerts, save local history, and manage temporary background claim tabs.</li>
           </ul>
           <p class="helper">

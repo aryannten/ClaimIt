@@ -1,4 +1,17 @@
-import { getSettings, saveSettings } from '../storage.js';
+import {
+  STORAGE_KEYS,
+  getSettings,
+  saveSettings,
+  getRegionState,
+  getCachedFxRates,
+  setCachedFxRates
+} from '../storage.js';
+import {
+  SUPPORTED_CURRENCIES,
+  resolveRegionAndCurrency,
+  getCurrencyLabel,
+  getExchangeRates
+} from '../currency.js';
 import { getAllProviders } from '../providers/index.js';
 import { logger } from '../logger.js';
 import { createSvgUse, createIllustration } from '../ui/ui-helpers.js';
@@ -15,6 +28,9 @@ const STORE_HELPERS = {
 const els = {
   saveStatus: document.getElementById('saveStatus'),
   storesList: document.getElementById('storesList'),
+  currencySelect: document.getElementById('currencySelect'),
+  detectedRegionText: document.getElementById('detectedRegionText'),
+  changeCurrencyBtn: document.getElementById('changeCurrencyBtn'),
   checkIntervalHours: document.getElementById('checkIntervalHours'),
   thuFriBoost: document.getElementById('thuFriBoost'),
   dryRunToggle: document.getElementById('dryRunToggle'),
@@ -148,7 +164,8 @@ function renderStores(settings) {
   }
 }
 
-async function renderLogs() {
+async function renderLogs(locale) {
+  const effectiveLocale = locale || resolveRegionAndCurrency({ settings: await getSettings(), storedRegion: await getRegionState() }).locale;
   const level = els.logLevelFilter.value;
   const all = await logger.getAll();
   const recent = all.slice(-50);
@@ -172,7 +189,7 @@ async function renderLogs() {
     return;
   }
 
-  const timeFmt = new Intl.DateTimeFormat(undefined, {
+  const timeFmt = new Intl.DateTimeFormat(effectiveLocale || undefined, {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit'
@@ -204,7 +221,10 @@ async function renderLogs() {
 
 async function hydrate() {
   const settings = await getSettings();
+  const storedRegion = await getRegionState();
+  const region = resolveRegionAndCurrency({ settings, storedRegion });
   renderStores(settings);
+  renderCurrencyControl(settings, region);
 
   els.checkIntervalHours.value = String(settings.checkIntervalHours ?? 6);
   els.thuFriBoost.checked = settings.thursdayFridayHourlyBoost !== false;
@@ -219,7 +239,30 @@ async function hydrate() {
   els.discordWebhookUrl.value = settings.notifications?.discord?.webhookUrl || '';
 
   els.remoteConfigUrl.value = settings.remoteConfigUrl || '';
-  await renderLogs();
+  await renderLogs(region.locale);
+}
+
+function renderCurrencyControl(settings, region) {
+  els.currencySelect.replaceChildren();
+  els.currencySelect.add(
+    new Option(`Auto (${region.countryName} - ${region.detectedCurrency})`, 'auto')
+  );
+  for (const code of SUPPORTED_CURRENCIES) {
+    els.currencySelect.add(new Option(getCurrencyLabel(code, region.browserLocale), code));
+  }
+  const activeVal =
+    settings.currency && String(settings.currency).toLowerCase() !== 'auto'
+      ? settings.currency.toUpperCase()
+      : 'auto';
+  els.currencySelect.value = activeVal;
+
+  if (region.isOverridden) {
+    els.detectedRegionText.textContent = `Detected: ${region.countryName}, ${region.detectedCurrency}. Showing ${region.currency}.`;
+    els.changeCurrencyBtn.textContent = 'Reset to Auto';
+  } else {
+    els.detectedRegionText.textContent = `Detected: ${region.countryName}, ${region.detectedCurrency}.`;
+    els.changeCurrencyBtn.textContent = 'Change';
+  }
 }
 
 async function saveNotificationFields() {
@@ -239,6 +282,34 @@ async function saveNotificationFields() {
   });
   flashStatus('Saved');
 }
+
+async function applyCurrencySelection(selectedValue) {
+  const currency = selectedValue || 'auto';
+  const nextSettings = await saveSettings({ currency });
+  const storedRegion = await getRegionState();
+  const region = resolveRegionAndCurrency({ settings: nextSettings, storedRegion });
+  renderCurrencyControl(nextSettings, region);
+  await getExchangeRates({
+    cached: await getCachedFxRates(),
+    saveCacheFn: setCachedFxRates
+  }).catch(() => null);
+  flashStatus('Currency updated');
+}
+
+els.currencySelect.addEventListener('change', async () => {
+  await applyCurrencySelection(els.currencySelect.value);
+});
+
+els.changeCurrencyBtn.addEventListener('click', async () => {
+  const isOverridden =
+    els.currencySelect.value && String(els.currencySelect.value).toLowerCase() !== 'auto';
+  if (isOverridden) {
+    els.currencySelect.value = 'auto';
+    await applyCurrencySelection('auto');
+    return;
+  }
+  els.currencySelect.focus();
+});
 
 els.checkIntervalHours.addEventListener('change', async () => {
   const hours = Math.max(1, Math.min(168, Number(els.checkIntervalHours.value) || 6));
@@ -357,8 +428,8 @@ els.clearHistoryBtn.addEventListener('click', async () => {
   }
 });
 
-els.logLevelFilter.addEventListener('change', renderLogs);
-els.refreshLogsBtn.addEventListener('click', renderLogs);
+els.logLevelFilter.addEventListener('change', () => renderLogs());
+els.refreshLogsBtn.addEventListener('click', () => renderLogs());
 
 els.copyLogsBtn.addEventListener('click', async () => {
   try {
@@ -374,6 +445,16 @@ els.clearLogsBtn.addEventListener('click', async () => {
   await logger.clear();
   await renderLogs();
   flashStatus('Logs cleared');
+});
+
+chrome.storage?.onChanged?.addListener((changes, areaName) => {
+  if (areaName !== 'local') return;
+  if (changes[STORAGE_KEYS.REGION] || changes[STORAGE_KEYS.SETTINGS]) {
+    Promise.all([getSettings(), getRegionState()]).then(([settings, storedRegion]) => {
+      const region = resolveRegionAndCurrency({ settings, storedRegion });
+      renderCurrencyControl(settings, region);
+    });
+  }
 });
 
 hydrate();
