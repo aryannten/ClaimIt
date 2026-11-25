@@ -4,15 +4,28 @@
  */
 
 import * as epic from './epic.js';
+import * as steam from './steam.js';
+import * as gog from './gog.js';
+import * as primeGaming from './prime-gaming.js';
+import * as fab from './fab.js';
+import * as itch from './itch.js';
 
-const PROVIDERS = [epic];
+const PROVIDERS = [epic, steam, gog, primeGaming, fab, itch];
 
 /**
- * Return all registered store providers.
+ * Return all registered store providers (including disabled future stubs).
  * @returns {Array<object>}
  */
 export function getAllProviders() {
   return PROVIDERS.slice();
+}
+
+/**
+ * Return active (non-stub) store providers.
+ * @returns {Array<object>}
+ */
+export function getActiveProviders() {
+  return PROVIDERS.filter((p) => p.stub !== true);
 }
 
 /**
