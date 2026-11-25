@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-26T00:00:00.000Z",
+  "stores": {
+    "epic": {
+      "endpoints": {
+        "promotions": "https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=en-US",
+        "storeBase": "https://store.epicgames.com/en-US/p/",
+        "bundleBase": "https://store.epicgames.com/en-US/bundles/",
+        "purchaseBase": "https://store.epicgames.com/purchase",
+        "freeGamesPage": "https://store.epicgames.com/en-US/free-games"
+      },
+      "selectors": {
+        "getButton": [
+          "button[data-testid='purchase-cta-button']",
+          "button[data-testid='add-to-cart-button']",
+          "[data-testid='purchase-cta-button']"
+        ],
+        "placeOrderButton": [
+          "button.payment-order-confirm__btn",
+          "button[data-testid='place-order-button']",
+          "#purchase-app button.payment-btn--primary",
+          "button[class*='payment-order-confirm']"
+        ],
+        "euAgreeButton": [
+          "button[data-testid='eu-eula-accept']",
+          "button[class*='eula-accept']",
+          "#purchase-app button"
+        ],
+        "eulaCheckbox": [
+          "input[type='checkbox'][name*='agree']",
+          "input[type='checkbox'][id*='agree']",
+          ".payment-check-box input[type='checkbox']"
+        ],
+        "checkoutIframe": [
+          "iframe[src*='epicgames.com/purchase']",
+          "iframe[src*='payment-website-pci']",
+          "#webPurchaseContainer iframe"
+        ],
+        "captchaContainer": [
+          "iframe[src*='hcaptcha']",
+          "iframe[src*='arkoselabs']",
+          "iframe[src*='funcaptcha']",
+          "iframe[src*='recaptcha']",
+          "iframe[title*='challenge' i]",
+          "[data-testid='captcha']",
+          "#hcaptcha-container"
+        ],
+        "ownedIndicator": [
+          "[data-testid='purchase-cta-button']"
+        ],
+        "regionUnavailableIndicator": [
+          "[data-testid='region-blocked']",
+          "[data-testid='product-unavailable']",
+          "main"
+        ],
+        "loginIndicator": [
+          "[data-testid='user-menu']",
+          "a[href*='/login']",
+          "#login-button"
+        ]
+      },
+      "texts": {
+        "getButton": ["get", "free", "claim"],
+        "placeOrderButton": ["place order", "confirm order", "complete order"],
+        "euAgreeButton": ["i agree", "accept", "agree"],
+        "owned": ["in library", "owned"],
+        "unavailable": [
+          "unavailable in your region",
+          "this content is currently unavailable in your platform or region",
+          "not available in your country"
+        ],
+        "loginRequired": ["sign in", "log in"],
+        "orderConfirmed": [
+          "thank you for buying",
+          "thank you!",
+          "an email receipt has been sent",
+          "order complete",
+          "now in your library"
+        ]
+      }
+    },
+    "steam": {
+      "endpoints": {
+        "searchResults": "https://store.steampowered.com/search/results/?query=&maxprice=free&specials=1&infinite=1&json=1",
+        "searchPage": "https://store.steampowered.com/search/?maxprice=free&specials=1",
+        "userdata": "https://store.steampowered.com/dynamicstore/userdata/",
+        "appBase": "https://store.steampowered.com/app/",
+        "addFreeLicense": "https://store.steampowered.com/freelicense/addfreelicense/",
+        "steamdbFree": "https://steamdb.info/upcoming/free/"
+      },
+      "selectors": {
+        "searchRow": [
+          "a.search_result_row"
+        ],
+        "searchTitle": [
+          ".title"
+        ],
+        "searchOriginalPrice": [
+          ".discount_original_price"
+        ],
+        "searchFinalPrice": [
+          ".discount_final_price"
+        ],
+        "searchDiscountPct": [
+          ".discount_pct"
+        ],
+        "searchImage": [
+          ".search_capsule img"
+        ],
+        "addToAccountButton": [
+          ".btn_addtocart a[href*='addFreeLicense']",
+          ".btn_addtocart a.btn_green_steamui",
+          ".btn_addtocart button",
+          ".game_area_purchase_game .btn_addtocart a",
+          "#freeGameBtn"
+        ],
+        "ownedIndicator": [
+          ".game_area_already_owned",
+          ".already_in_library",
+          ".ds_owned_flag"
+        ],
+        "ageGateForm": [
+          "#agecheck_form",
+          ".agegate_birthday_selector",
+          "#app_agegate"
+        ],
+        "ageGateContinue": [
+          "#view_product_page_btn",
+          ".agegate_text_container a.btnv6_blue_hoverfade"
+        ],
+        "loginIndicator": [
+          "#account_pulldown",
+          "a.global_action_link[href*='login']"
+        ],
+        "regionError": [
+          ".error_description",
+          "#error_box"
+        ]
+      },
+      "texts": {
+        "addToAccount": ["add to account", "claim", "get", "add to library"],
+        "alreadyOwned": ["is already in your steam library", "in library", "already owned"],
+        "loginRequired": ["sign in", "log in", "login"],
+        "ageGate": ["please enter your birth date", "content in this product may not be appropriate"],
+        "freeWeekendOrTrial": ["free weekend", "play for free", "days left", "hours left"],
+        "unavailable": ["this item is currently unavailable in your region"],
+        "claimedSuccess": ["has been added to your account", "success!", "now in your library"]
+      }
+    }
+  }
+}
