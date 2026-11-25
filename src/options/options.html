@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ClaimIt Options</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="page-header">
+      <div class="brand">
+        <img src="../../assets/icon-48.png" alt="ClaimIt" class="brand-icon" />
+        <div>
+          <h1>ClaimIt Settings</h1>
+          <p class="subtitle">Configure stores, check intervals, remote selector rules, notifications, and debug logs.</p>
+        </div>
+      </div>
+      <div class="header-status" id="saveStatus"></div>
+    </header>
+
+    <section class="panel">
+      <h2>Store Providers</h2>
+      <p class="hint">ClaimIt relies strictly on your existing logged-in browser sessions. It never asks for or stores passwords.</p>
+      <div id="storesList" class="stores-grid"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Schedule & Safety</h2>
+      <div class="form-row">
+        <label for="checkIntervalHours">Default check interval (hours)</label>
+        <input id="checkIntervalHours" type="number" min="1" max="168" step="1" class="input-sm" />
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="thuFriBoost">Thursday & Friday hourly check boost</label>
+          <p class="hint">Epic rotates free games on Thursdays; polls hourly on Thu/Fri so drops aren't missed.</p>
+        </div>
+        <input id="thuFriBoost" type="checkbox" />
+      </div>
+      <div class="form-row">
+        <div>
+          <label for="dryRunToggle">Dry-run mode</label>
+          <p class="hint">Runs the entire detection and navigation flow without clicking the final claim button.</p>
+        </div>
+        <input id="dryRunToggle" type="checkbox" />
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Notifications</h2>
+      <div class="form-row">
+        <div>
+          <label for="chromeNotifToggle">Chrome desktop notifications</label>
+          <p class="hint">Shows game cover art, status, and one-click "Claim now" actions.</p>
+        </div>
+        <input id="chromeNotifToggle" type="checkbox" />
+      </div>
+
+      <div class="subsection">
+        <div class="sub-header">
+          <h3>Telegram Alerts (NEEDS_USER & FAILED)</h3>
+          <input id="telegramEnabled" type="checkbox" />
+        </div>
+        <div class="grid-2">
+          <div>
+            <label for="telegramBotToken">Bot Token</label>
+            <input id="telegramBotToken" type="password" placeholder="123456:ABC-DEF..." autocomplete="off" />
+          </div>
+          <div>
+            <label for="telegramChatId">Chat ID</label>
+            <input id="telegramChatId" type="text" placeholder="e.g. 987654321" />
+          </div>
+        </div>
+        <div class="actions-row">
+          <button id="testTelegramBtn" type="button" class="btn">Test Telegram</button>
+        </div>
+      </div>
+
+      <div class="subsection">
+        <div class="sub-header">
+          <h3>Discord Webhook (NEEDS_USER & FAILED)</h3>
+          <input id="discordEnabled" type="checkbox" />
+        </div>
+        <div>
+          <label for="discordWebhookUrl">Webhook URL</label>
+          <input id="discordWebhookUrl" type="url" placeholder="https://discord.com/api/webhooks/..." />
+        </div>
+        <div class="actions-row">
+          <button id="testDiscordBtn" type="button" class="btn">Test Discord</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Remote Selector Config</h2>
+      <p class="hint">Optional HTTPS GitHub raw JSON URL overriding bundled button selectors and endpoints. Falls back safely to the bundled config on error.</p>
+      <div class="inline-field">
+        <input id="remoteConfigUrl" type="url" placeholder="https://raw.githubusercontent.com/<user>/<repo>/main/config/selectors.json" />
+        <button id="refreshConfigBtn" type="button" class="btn">Fetch & Validate</button>
+      </div>
+      <p class="hint" id="remoteConfigStatus">Active source: bundled</p>
+    </section>
+
+    <section class="panel">
+      <div class="sub-header">
+        <div>
+          <h2>Data & Diagnostics</h2>
+          <p class="hint">History and last ~200 structured log entries stored locally.</p>
+        </div>
+        <div class="actions-row">
+          <button id="clearHistoryBtn" type="button" class="btn btn-danger">Clear history</button>
+        </div>
+      </div>
+
+      <div class="log-controls">
+        <select id="logLevelFilter">
+          <option value="all">All levels</option>
+          <option value="info">Info</option>
+          <option value="warn">Warnings</option>
+          <option value="error">Errors</option>
+          <option value="debug">Debug</option>
+        </select>
+        <div class="actions-row">
+          <button id="refreshLogsBtn" type="button" class="btn">Refresh logs</button>
+          <button id="copyLogsBtn" type="button" class="btn">Copy JSON</button>
+          <button id="clearLogsBtn" type="button" class="btn">Clear logs</button>
+        </div>
+      </div>
+
+      <div id="logsContainer" class="logs-box"></div>
+    </section>
+  </div>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>
