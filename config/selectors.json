@@ -7,7 +7,6 @@
         "promotions": "https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=en-US",
         "storeBase": "https://store.epicgames.com/en-US/p/",
         "bundleBase": "https://store.epicgames.com/en-US/bundles/",
-        "purchaseBase": "https://store.epicgames.com/purchase",
         "freeGamesPage": "https://store.epicgames.com/en-US/free-games"
       },
       "selectors": {
@@ -32,6 +31,10 @@
           "input[type='checkbox'][id*='agree']",
           ".payment-check-box input[type='checkbox']"
         ],
+        "checkoutContainer": [
+          "#webPurchaseContainer",
+          "#purchase-app"
+        ],
         "checkoutIframe": [
           "iframe[src*='epicgames.com/purchase']",
           "iframe[src*='payment-website-pci']",
@@ -52,7 +55,10 @@
         "regionUnavailableIndicator": [
           "[data-testid='region-blocked']",
           "[data-testid='product-unavailable']",
-          "main"
+          "[data-testid='error-page']",
+          "[role='alert']",
+          "h1",
+          "h2"
         ],
         "loginIndicator": [
           "[data-testid='user-menu']",
@@ -83,37 +89,22 @@
     "steam": {
       "endpoints": {
         "searchResults": "https://store.steampowered.com/search/results/?query=&maxprice=free&specials=1&infinite=1&json=1",
-        "searchPage": "https://store.steampowered.com/search/?maxprice=free&specials=1",
         "userdata": "https://store.steampowered.com/dynamicstore/userdata/",
         "appBase": "https://store.steampowered.com/app/",
-        "addFreeLicense": "https://store.steampowered.com/freelicense/addfreelicense/",
         "steamdbFree": "https://steamdb.info/upcoming/free/"
       },
       "selectors": {
-        "searchRow": [
-          "a.search_result_row"
-        ],
-        "searchTitle": [
-          ".title"
-        ],
-        "searchOriginalPrice": [
-          ".discount_original_price"
-        ],
-        "searchFinalPrice": [
-          ".discount_final_price"
-        ],
-        "searchDiscountPct": [
-          ".discount_pct"
-        ],
-        "searchImage": [
-          ".search_capsule img"
+        "purchaseContainer": [
+          ".game_area_purchase_game_wrapper",
+          "#game_area_purchase"
         ],
         "addToAccountButton": [
           ".btn_addtocart a[href*='addFreeLicense']",
           ".btn_addtocart a.btn_green_steamui",
           ".btn_addtocart button",
           ".game_area_purchase_game .btn_addtocart a",
-          "#freeGameBtn"
+          "#freeGameBtn",
+          "a[href*='addFreeLicense']"
         ],
         "ownedIndicator": [
           ".game_area_already_owned",
@@ -125,13 +116,18 @@
           ".agegate_birthday_selector",
           "#app_agegate"
         ],
+        "ageGateYear": [
+          "#ageYear"
+        ],
         "ageGateContinue": [
           "#view_product_page_btn",
           ".agegate_text_container a.btnv6_blue_hoverfade"
         ],
         "loginIndicator": [
-          "#account_pulldown",
           "a.global_action_link[href*='login']"
+        ],
+        "accountIndicator": [
+          "#account_pulldown"
         ],
         "regionError": [
           ".error_description",
