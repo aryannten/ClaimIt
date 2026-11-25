@@ -58,6 +58,10 @@
  *
  * Notes from live verification:
  * - `discountSetting.discountPercentage` represents % of original price PAID (0 === 100% off!).
+ * - Regional pricing: passing `&locale=en-IN&country=IN&allowCountries=IN` returns
+ *   `price.totalPrice` in minor units for INR (`originalPrice: 46900`, `currencyCode: "INR"`,
+ *   `currencyInfo: { decimals: 2 }`); omitting `country` defaults to US/USD (`1999`),
+ *   and zero-decimal regions like `country=JP` return `decimals: 0` (`originalPrice: 2080`).
  * - Active partial discounts (e.g. discountPercentage: 70) and F2P items (originalPrice: 0)
  *   can also appear in elements[], so both active promo checks and classifier checks are vital.
  * - `productSlug` is often null on newer listings; `offerMappings` / `catalogNs.mappings` hold
@@ -65,6 +69,11 @@
  */
 
 import { CLAIM_STATUS, delay, humanDelay } from './constants.js';
+import {
+  getBrowserLocale,
+  normalizeCountryCode,
+  normalizeCurrencyCode
+} from '../currency.js';
 import {
   openBackgroundTab,
   focusTab,
@@ -132,11 +141,13 @@ function resolveEpicStoreUrl(element, endpoints = {}) {
  * @param {object} json
  * @param {object} [endpoints]
  * @param {number} [nowMs=Date.now()]
+ * @param {{ country?: string|null }} [options]
  * @returns {object[]}
  */
-export function parseEpicPromotions(json, endpoints = {}, nowMs = Date.now()) {
+export function parseEpicPromotions(json, endpoints = {}, nowMs = Date.now(), options = {}) {
   const elements = json?.data?.Catalog?.searchStore?.elements;
   if (!Array.isArray(elements)) return [];
+  const defaultCountry = normalizeCountryCode(options.country);
 
   const offers = [];
   for (const el of elements) {
@@ -149,6 +160,7 @@ export function parseEpicPromotions(json, endpoints = {}, nowMs = Date.now()) {
     const rawDiscount = Number(totalPrice.discountPrice ?? rawOriginal);
     const originalPrice = divisor > 0 ? rawOriginal / divisor : rawOriginal;
     const discountPrice = divisor > 0 ? rawDiscount / divisor : rawDiscount;
+    const currencyCode = normalizeCurrencyCode(totalPrice.currencyCode);
 
     const promoGroups = el.promotions?.promotionalOffers || [];
     const upcomingGroups = el.promotions?.upcomingPromotionalOffers || [];
@@ -211,10 +223,13 @@ export function parseEpicPromotions(json, endpoints = {}, nowMs = Date.now()) {
       url: resolveEpicStoreUrl(el, endpoints),
       image: pickCoverImage(el.keyImages),
       originalPrice,
-      originalPriceFormatted: totalPrice.fmtPrice?.originalPrice || `$${originalPrice.toFixed(2)}`,
+      originalPriceFormatted: totalPrice.fmtPrice?.originalPrice || '',
       discountPrice,
       discountPercent,
-      currency: totalPrice.currencyCode || 'USD',
+      currencyCode,
+      currency: currencyCode,
+      country: defaultCountry,
+      priceSource: 'store',
       startDate: fallbackPromo?.startDate || null,
       endDate: fallbackPromo?.endDate || null,
       type: isDlc ? 'dlc' : (isDemo ? 'demo' : 'game'),
@@ -224,7 +239,8 @@ export function parseEpicPromotions(json, endpoints = {}, nowMs = Date.now()) {
       isDemo,
       isUpcoming,
       isLimitedTime: Boolean(fallbackPromo?.endDate),
-      isFreeToPlay: rawOriginal === 0 && !activePromo
+      isFreeToPlay: rawOriginal === 0 && !activePromo,
+      regionUnavailable: Boolean(el.regionUnavailable)
     });
   }
 
@@ -233,19 +249,29 @@ export function parseEpicPromotions(json, endpoints = {}, nowMs = Date.now()) {
 
 /**
  * Fetch current offers from Epic's public freeGamesPromotions endpoint.
- * Returns normalized offer objects (including active 100% off and upcoming/non-100% items
- * so classifier.js can filter deterministically).
- * @param {{ config: object }} context
+ * Passes country & locale parameters when known so regional pricing is returned directly.
+ * @param {{ config: object, region?: { country?: string, browserLocale?: string } }} context
  * @returns {Promise<object[]>}
  */
 export async function fetchOffers(context = {}) {
   const epicCfg = context.config?.stores?.epic || {};
   const endpoints = epicCfg.endpoints || {};
-  const url =
-    endpoints.promotions ||
-    'https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=en-US';
+  const country = normalizeCountryCode(context.region?.country);
+  const locale = context.region?.browserLocale || getBrowserLocale();
 
-  const response = await fetch(url, {
+  const url = new URL(
+    endpoints.promotions ||
+      'https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions'
+  );
+  if (locale) {
+    url.searchParams.set('locale', locale);
+  }
+  if (country) {
+    url.searchParams.set('country', country);
+    url.searchParams.set('allowCountries', country);
+  }
+
+  const response = await fetch(url.href, {
     method: 'GET',
     headers: { Accept: 'application/json' },
     cache: 'no-store'
@@ -256,7 +282,7 @@ export async function fetchOffers(context = {}) {
   }
 
   const json = await response.json();
-  return parseEpicPromotions(json, endpoints);
+  return parseEpicPromotions(json, endpoints, Date.now(), { country });
 }
 
 /**
@@ -297,6 +323,10 @@ export async function claim(offer, context = {}) {
   const epicCfg = context.config?.stores?.epic || {};
   const dryRun = Boolean(context.dryRun);
   const signal = context.signal;
+
+  if (offer?.regionUnavailable) {
+    return { status: CLAIM_STATUS.NEEDS_USER, reason: 'Not available in your region' };
+  }
 
   let tab = null;
   let keepTabOpen = false;
@@ -346,7 +376,7 @@ export async function claim(offer, context = {}) {
       return await handoffToUser('Captcha detected on Epic store page');
     }
     if (topState.unavailable) {
-      return await handoffToUser('Unavailable in your region');
+      return await handoffToUser('Not available in your region');
     }
     if (topState.loginRequired) {
       return await handoffToUser('Login required on Epic Games Store');
@@ -419,7 +449,7 @@ export async function claim(offer, context = {}) {
           return await handoffToUser('Login required on Epic Games Store');
         }
         if (topCheck?.unavailable) {
-          return await handoffToUser('Unavailable in your region');
+          return await handoffToUser('Not available in your region');
         }
         if (orderPlaced && topCheck?.owned) {
           return { status: CLAIM_STATUS.CLAIMED };
@@ -443,7 +473,7 @@ export async function claim(offer, context = {}) {
         return await handoffToUser('Captcha appeared during Epic checkout');
       }
       if (checkoutState.unavailable) {
-        return await handoffToUser('Unavailable in your region');
+        return await handoffToUser('Not available in your region');
       }
       if (checkoutState.orderConfirmed) {
         return { status: CLAIM_STATUS.CLAIMED };
