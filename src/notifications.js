@@ -74,7 +74,7 @@ async function fetchCoverDataUrl(imageUrl) {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
-    const resp = await fetch(imageUrl, { signal: controller.signal });
+    const resp = await fetch(imageUrl, { signal: controller.signal, redirect: 'error' });
     clearTimeout(timer);
     if (!resp.ok) return null;
 

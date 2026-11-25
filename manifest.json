@@ -27,22 +27,26 @@
     "service_worker": "src/background.js",
     "type": "module"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none';"
+  },
   "permissions": [
     "alarms",
     "notifications",
     "storage",
     "scripting",
-    "tabs"
+    "tabs",
+    "windows"
   ],
   "host_permissions": [
     "https://store-site-backend-static-ipv4.ak.epicgames.com/*",
     "https://store.epicgames.com/*",
     "https://payment-website-pci.ol.epicgames.com/*",
     "https://store.steampowered.com/*",
-    "https://raw.githubusercontent.com/*",
-    "https://open.er-api.com/*"
+    "https://raw.githubusercontent.com/*"
   ],
   "optional_host_permissions": [
+    "https://open.er-api.com/*",
     "https://api.telegram.org/*",
     "https://discord.com/*",
     "https://discordapp.com/*",

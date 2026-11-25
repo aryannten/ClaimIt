@@ -18,6 +18,7 @@ import {
 } from '../currency.js';
 import { CLAIM_STATUS } from '../providers/constants.js';
 import { logger } from '../logger.js';
+import { isAllowedStoreUrl } from '../url-validator.js';
 import {
   createSvgUse,
   createIllustration,
@@ -61,7 +62,7 @@ let renderQueued = false;
 let lastIpcError = null;
 
 function isSafeHttpsUrl(url) {
-  return typeof url === 'string' && url.startsWith('https://');
+  return isAllowedStoreUrl(url);
 }
 
 async function openStoreTab(url) {

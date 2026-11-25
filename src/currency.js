@@ -362,6 +362,7 @@ export async function getExchangeRates({
         method: 'GET',
         headers: { Accept: 'application/json' },
         cache: 'no-store',
+        redirect: 'error',
         signal: controller?.signal
       });
       if (resp && resp.ok) {

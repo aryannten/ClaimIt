@@ -20,6 +20,7 @@ import {
 } from './notifications.js';
 import { focusTab } from './providers/tab-helpers.js';
 import { logger } from './logger.js';
+import { isAllowedStoreUrl } from './url-validator.js';
 
 export { CHECK_ALARM_NAME };
 
@@ -51,7 +52,7 @@ async function openOrFocusNotificationTarget(notificationId) {
       // Original tab was closed; open a fresh active tab
     }
   }
-  if (target.offerUrl) {
+  if (target.offerUrl && isAllowedStoreUrl(target.offerUrl)) {
     await chrome.tabs.create({ url: target.offerUrl, active: true });
   }
 }
@@ -93,7 +94,10 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
     await removeNotificationTarget(notificationId);
   });
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Only process messages from this extension's own pages (popup, options).
+    // Reject messages from web pages or content scripts relaying external data.
+    if (sender.id !== chrome.runtime.id) return false;
     const handle = async () => {
       switch (message?.type) {
         case 'CLAIMIT_RUN_CHECK':

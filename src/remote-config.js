@@ -176,6 +176,7 @@ export async function getSelectorsConfig(options = {}) {
       method: 'GET',
       headers: { Accept: 'application/json' },
       cache: 'no-store',
+      redirect: 'error',
       signal: controller.signal
     });
     clearTimeout(timer);
@@ -183,7 +184,12 @@ export async function getSelectorsConfig(options = {}) {
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
     }
-    const json = await resp.json();
+    // Reject oversized payloads before parsing to prevent memory exhaustion
+    const rawText = await resp.text();
+    if (rawText.length > 524288) {
+      throw new Error('Remote config response exceeds 512 KB size limit');
+    }
+    const json = JSON.parse(rawText);
     const validation = validateSelectorsConfig(json);
     if (!validation.valid) {
       throw new Error(`Schema validation failed: ${validation.errors.join('; ')}`);
