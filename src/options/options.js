@@ -232,7 +232,7 @@ els.testTelegramBtn.addEventListener('click', async () => {
     return;
   }
   await saveNotificationFields();
-  const res = await chrome.runtime.sendMessage({
+  const res = await sendBgMessage({
     type: 'CLAIMIT_TEST_WEBHOOK',
     channel: 'telegram',
     config: {
@@ -243,8 +243,6 @@ els.testTelegramBtn.addEventListener('click', async () => {
   });
   if (res?.ok) {
     flashStatus('Telegram test sent');
-  } else {
-    flashStatus(res?.error || 'Telegram test failed', true);
   }
 });
 
@@ -255,7 +253,7 @@ els.testDiscordBtn.addEventListener('click', async () => {
     return;
   }
   await saveNotificationFields();
-  const res = await chrome.runtime.sendMessage({
+  const res = await sendBgMessage({
     type: 'CLAIMIT_TEST_WEBHOOK',
     channel: 'discord',
     config: {
@@ -265,8 +263,6 @@ els.testDiscordBtn.addEventListener('click', async () => {
   });
   if (res?.ok) {
     flashStatus('Discord test sent');
-  } else {
-    flashStatus(res?.error || 'Discord test failed', true);
   }
 });
 
