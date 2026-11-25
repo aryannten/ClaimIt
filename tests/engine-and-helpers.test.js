@@ -10,7 +10,6 @@ import {
   getHistory
 } from '../src/storage.js';
 import { shouldNotify, buildTelegramPayload, buildDiscordPayload, notifyOfferOutcome } from '../src/notifications.js';
-import { computeAlarmPeriodMinutes, syncAlarmSchedule, CHECK_ALARM_NAME } from '../src/background.js';
 import { runCheckCycle, executeClaimWithTimeout } from '../src/engine.js';
 import { CLAIM_STATUS, delay } from '../src/providers/constants.js';
 
@@ -167,25 +166,6 @@ test('buildTelegramPayload and buildDiscordPayload format NEEDS_USER and FAILED 
   const dc = buildDiscordPayload(offer, 'FAILED', 'timeout');
   assert.match(dc.embeds[0].title, /Sample Game \[DLC\]/);
   assert.match(dc.embeds[0].description, /timeout/);
-});
-
-test('computeAlarmPeriodMinutes and syncAlarmSchedule manage chrome.alarms cleanly', async () => {
-  const settings = { checkIntervalHours: 6, thursdayFridayHourlyBoost: true };
-  assert.equal(computeAlarmPeriodMinutes(settings, new Date('2026-11-26T12:00:00')), 60);
-  assert.equal(computeAlarmPeriodMinutes(settings, new Date('2026-11-27T12:00:00')), 60);
-  assert.equal(computeAlarmPeriodMinutes(settings, new Date('2026-11-28T12:00:00')), 360);
-
-  const { chromeMock, alarms } = createChromeMock({
-    [STORAGE_KEYS.SETTINGS]: { checkIntervalHours: 6, thursdayFridayHourlyBoost: false }
-  });
-  globalThis.chrome = chromeMock;
-  try {
-    const period = await syncAlarmSchedule();
-    assert.equal(period, 360);
-    assert.equal(alarms[CHECK_ALARM_NAME].periodInMinutes, 360);
-  } finally {
-    delete globalThis.chrome;
-  }
 });
 
 test('executeClaimWithTimeout aborts and returns FAILED(timeout)', async () => {

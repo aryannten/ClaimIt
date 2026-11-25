@@ -129,8 +129,11 @@ test('getSelectorsConfig handles valid remote JSON, invalid JSON, schema mismatc
     assert.deepEqual(resRemote.config.stores.epic.selectors.getButton, ['button.remote-get']);
 
     // 4. Network error falls back to valid cache
-    globalThis.fetch = async () => {
-      throw new Error('Network offline');
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('raw.githubusercontent.com')) {
+        throw new Error('Network offline');
+      }
+      return new Response(raw, { status: 200 });
     };
     const resFallback = await getSelectorsConfig({ forceRefresh: true });
     assert.equal(resFallback.source, 'cache');
