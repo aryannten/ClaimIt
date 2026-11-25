@@ -15,7 +15,7 @@ const DLC_PATTERN = /\b(dlc|add[\s-]?on|expansion|soundtrack|season\s+pass|pack)
  * @param {string|number|Date|null|undefined} value
  * @returns {number|null}
  */
-export function parseTimestamp(value) {
+function parseTimestamp(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
@@ -29,7 +29,7 @@ export function parseTimestamp(value) {
  * @param {number|{amount?: number, value?: number}|string|null|undefined} price
  * @returns {number}
  */
-export function normalizePriceAmount(price) {
+function normalizePriceAmount(price) {
   if (typeof price === 'number') {
     return Number.isFinite(price) ? price : 0;
   }
@@ -50,7 +50,7 @@ export function normalizePriceAmount(price) {
  * @param {object} offer
  * @returns {boolean}
  */
-export function isDlcOffer(offer) {
+function isDlcOffer(offer) {
   if (!offer || typeof offer !== 'object') return false;
   if (offer.isDlc === true) return true;
   const type = String(offer.type || '').toLowerCase();
@@ -73,7 +73,7 @@ export function isDlcOffer(offer) {
  * @param {object} offer
  * @returns {boolean}
  */
-export function isDemoOffer(offer) {
+function isDemoOffer(offer) {
   if (!offer || typeof offer !== 'object') return false;
   if (offer.isDemo === true) return true;
   const type = String(offer.type || '').toLowerCase();
@@ -89,7 +89,7 @@ export function isDemoOffer(offer) {
  * @param {object} offer
  * @returns {boolean}
  */
-export function isTrialOrWeekendOffer(offer) {
+function isTrialOrWeekendOffer(offer) {
   if (!offer || typeof offer !== 'object') return false;
   if (offer.isFreeWeekend === true || offer.isTrial === true) return true;
   const type = String(offer.type || '').toLowerCase();
@@ -107,7 +107,7 @@ export function isTrialOrWeekendOffer(offer) {
  * @param {number|null} endMs
  * @returns {boolean}
  */
-export function isPermanentFreeToPlay(offer, endMs) {
+function isPermanentFreeToPlay(offer, endMs) {
   if (!offer || typeof offer !== 'object') return false;
   if (offer.isFreeToPlay === true) return true;
   const type = String(offer.type || '').toLowerCase();

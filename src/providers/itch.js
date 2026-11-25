@@ -13,7 +13,6 @@ import { CLAIM_STATUS } from './constants.js';
 export const id = 'itch';
 export const name = 'itch.io';
 export const stub = true;
-export const enabledByDefault = false;
 
 export async function fetchOffers() {
   // TODO: Implement itch.io 100%-off sales parser

@@ -13,7 +13,6 @@ import { CLAIM_STATUS } from './constants.js';
 export const id = 'gog';
 export const name = 'GOG';
 export const stub = true;
-export const enabledByDefault = false;
 
 export async function fetchOffers() {
   // TODO: Implement GOG giveaway scraping/API lookup

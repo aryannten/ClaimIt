@@ -21,14 +21,6 @@ export function getAllProviders() {
 }
 
 /**
- * Return active (non-stub) store providers.
- * @returns {Array<object>}
- */
-export function getActiveProviders() {
-  return PROVIDERS.filter((p) => p.stub !== true);
-}
-
-/**
  * Look up a provider by id.
  * @param {string} id
  * @returns {object|null}

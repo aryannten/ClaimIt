@@ -14,13 +14,13 @@ export const STORAGE_KEYS = {
   NOTIFICATION_STATE: 'claimit_notification_state'
 };
 
-export const CYCLE_LOCK_TTL_MS = 5 * 60 * 1000;
+const CYCLE_LOCK_TTL_MS = 5 * 60 * 1000;
 
 function hasChromeStorage() {
   return typeof chrome !== 'undefined' && Boolean(chrome?.storage?.local);
 }
 
-export const DEFAULT_SETTINGS = {
+const DEFAULT_SETTINGS = {
   paused: false,
   dryRun: false,
   checkIntervalHours: 6,

@@ -27,7 +27,7 @@ const customSources = new Map();
  * @param {string} str
  * @returns {string}
  */
-export function decodeHtmlEntities(str) {
+function decodeHtmlEntities(str) {
   return String(str || '')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -46,7 +46,7 @@ export function decodeHtmlEntities(str) {
  * @param {string} priceText
  * @returns {number}
  */
-export function parsePriceText(priceText) {
+function parsePriceText(priceText) {
   const text = String(priceText || '').trim();
   if (!text || /free/i.test(text)) return 0;
   const cleaned = text.replace(/[^\d.,]/g, '');

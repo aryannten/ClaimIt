@@ -39,7 +39,7 @@ export function shouldNotify(previousEntry, cycleId, status) {
  * @param {ArrayBuffer} buffer
  * @returns {string}
  */
-export function arrayBufferToBase64(buffer) {
+function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   const chunkSize = 0x8000;
   const parts = [];

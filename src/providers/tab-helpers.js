@@ -23,7 +23,7 @@ export async function openBackgroundTab(url, signal) {
  * @param {number} [timeoutMs=25000]
  * @param {AbortSignal} [signal]
  */
-export async function waitForTabComplete(tabId, timeoutMs = 25000, signal) {
+async function waitForTabComplete(tabId, timeoutMs = 25000, signal) {
   const current = await chrome.tabs.get(tabId);
   if (current.status === 'complete') return;
 

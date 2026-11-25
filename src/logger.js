@@ -2,8 +2,8 @@
  * Structured ring-buffer logger backed by chrome.storage.local (last 200 entries).
  */
 
-export const MAX_LOG_ENTRIES = 200;
-export const LOG_STORAGE_KEY = 'claimit_logs';
+const MAX_LOG_ENTRIES = 200;
+const LOG_STORAGE_KEY = 'claimit_logs';
 
 /**
  * Pure helper to append an entry to a bounded ring buffer.
@@ -29,7 +29,7 @@ export function appendToRingBuffer(existing, entry, maxEntries = MAX_LOG_ENTRIES
  * @param {object} [meta]
  * @returns {object}
  */
-export function createLogEntry(level, scope, message, meta = null) {
+function createLogEntry(level, scope, message, meta = null) {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     ts: new Date().toISOString(),
@@ -53,7 +53,7 @@ function hasChromeStorage() {
  * @param {string} message
  * @param {object} [meta]
  */
-export function writeLog(level, scope, message, meta = null) {
+function writeLog(level, scope, message, meta = null) {
   const entry = createLogEntry(level, scope, message, meta);
   if (!hasChromeStorage()) {
     return Promise.resolve(entry);

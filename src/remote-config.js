@@ -109,7 +109,7 @@ export function mergeConfigs(bundled, remote) {
  * Load the bundled config/selectors.json shipped with the extension.
  * @returns {Promise<object>}
  */
-export async function loadBundledConfig() {
+async function loadBundledConfig() {
   if (bundledConfigMemo) return bundledConfigMemo;
   const url = typeof chrome !== 'undefined' && chrome.runtime?.getURL
     ? chrome.runtime.getURL('config/selectors.json')
@@ -127,7 +127,7 @@ export async function loadBundledConfig() {
  * @param {string} url
  * @returns {boolean}
  */
-export function isValidRemoteConfigUrl(url) {
+function isValidRemoteConfigUrl(url) {
   if (!isNonEmptyString(url)) return false;
   try {
     const parsed = new URL(url.trim());

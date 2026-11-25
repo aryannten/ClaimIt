@@ -105,7 +105,7 @@ function pickCoverImage(keyImages) {
  * @param {object} endpoints
  * @returns {string}
  */
-export function resolveEpicStoreUrl(element, endpoints = {}) {
+function resolveEpicStoreUrl(element, endpoints = {}) {
   const storeBase = endpoints.storeBase || 'https://store.epicgames.com/en-US/p/';
   const bundleBase = endpoints.bundleBase || 'https://store.epicgames.com/en-US/bundles/';
 
