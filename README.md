@@ -8,9 +8,10 @@ ClaimIt is a Chrome Manifest V3 browser extension that monitors Epic Games Store
 - **Strict Offer Classifier (`src/classifier.js`)**: Claims only limited-time, 100%-off free-to-keep titles (including DLC, labeled as `DLC`). Excludes permanent free-to-play games, demos, free weekends / play-for-free trials, partial discounts, and upcoming promotions.
 - **Session-only Automation**: Never asks for, reads, or stores account passwords. Opens store pages in a background tab using your existing logged-in browser session and closes tabs automatically unless user action (`NEEDS_USER`) is required.
 - **Remote Selector Config (`config/selectors.json`)**: All endpoints, CSS selectors, and button text matchers are externalized and can be refreshed from a configurable HTTPS GitHub raw URL with schema validation, caching, and bundled fallback.
-- **Smart Scheduling**: Checks every 6 hours by default (configurable), polls hourly on Thursdays and Fridays for Epic's weekly rotation, and runs catch-up checks on startup and install.
+- **Once-Daily Randomized Scheduling**: Scans automatically once per day at a randomised time (`+18 h` to `+30 h`, bounded strictly within `12 h` to `36 h` via a single one-shot `chrome.alarms` `when` alarm), moves earlier with at least 1 hour of margin if a known offer expires sooner, and runs a delayed catch-up scan (`30–180 s`) if scans were missed while Chrome was closed.
+- **Low Memory & CPU Design**: Zero always-on content scripts (`chrome.scripting.executeScript` injects into a tab only while claiming), zero service worker timers or idle globals, 50-entry capped debug log ring buffer, and capped claim history.
 - **Multi-channel Notifications**: Chrome rich notifications with game cover art and **Claim now** / **Dismiss** actions, plus optional Telegram Bot and Discord Webhook alerts for `NEEDS_USER` and `FAILED` events.
-- **Safety & Observability**: Instant Pause switch, Dry-run mode, one-claim-at-a-time rate limiting with randomized 1–3 s click delays, 60 s per-claim abort timeout, per-store error isolation, and a 200-entry structured log buffer in `chrome.storage.local`.
+- **Safety & Observability**: Instant Pause switch, Dry-run mode, one-claim-at-a-time rate limiting with randomized 1–3 s click delays, 60 s per-claim abort timeout, per-store error isolation, and a 5-minute manual check cooldown.
 
 ## Project Structure
 
@@ -36,10 +37,11 @@ claimit-extension/
 │   ├── classifier.js          # Pure offer classification logic
 │   ├── currency.js            # Region detection, 24h FX rate cache & Intl formatting
 │   ├── engine.js              # Check cycle, rate limit, timeout, dry-run, pause abort
-│   ├── logger.js              # 200-entry structured ring buffer in chrome.storage.local
+│   ├── logger.js              # 50-entry structured ring buffer in chrome.storage.local
 │   ├── notifications.js       # Chrome, Telegram, and Discord notification dispatcher
 │   ├── remote-config.js       # Bundled + GitHub raw JSON loader & schema validator
-│   ├── storage.js             # Settings, history, value saved, and snapshot helpers
+│   ├── scheduler.js           # Randomized once-daily one-shot scheduler & missed-scan catch-up
+│   ├── storage.js             # Settings, capped history, value saved, and snapshot helpers
 │   ├── content/
 │   │   ├── epic.js            # Epic product & checkout iframe DOM interactions
 │   │   └── steam.js           # Steam store page, age-gate & Add to Account DOM helper
@@ -76,10 +78,10 @@ ClaimIt requests the minimum permissions required for MV3 operation:
 
 | Permission | Why it is needed |
 |---|---|
-| `alarms` | Schedules periodic background checks (default 6 h, hourly Thu/Fri) across service worker restarts. |
+| `alarms` | Schedules one-shot daily background checks (`when`) and delayed catch-up scans across service worker restarts. |
 | `notifications` | Displays desktop notifications with cover art and **Claim now** / **Dismiss** buttons. |
-| `storage` | Persists settings, claim history, offer snapshots, notification dedup state, selector cache, and the 200-entry debug log in `chrome.storage.local`. |
-| `scripting` | Enumerates frames (`allFrames`) and lazily ensures Epic/Steam content scripts are active inside store and checkout iframes. |
+| `storage` | Persists settings, capped claim history, offer snapshots, notification dedup state, selector cache, schedule timestamps, and the 50-entry debug log in `chrome.storage.local`. |
+| `scripting` | Enumerates frames (`allFrames`) and injects Epic/Steam content scripts on demand only inside an active claim tab. |
 | `tabs` | Opens store pages in background tabs during claiming, closes completed tabs, and focuses `NEEDS_USER` tabs in the foreground. |
 
 ### Host Permissions
