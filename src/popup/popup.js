@@ -4,14 +4,25 @@ import {
   getHistory,
   getCurrentOffers,
   getMeta,
+  getRegionState,
+  getCachedFxRates,
+  setCachedFxRates,
   computeValueSaved
 } from '../storage.js';
+import {
+  resolveRegionAndCurrency,
+  getExchangeRates,
+  formatOfferPriceState,
+  FX_CACHE_TTL_MS,
+  normalizeCurrencyCode
+} from '../currency.js';
 import { CLAIM_STATUS } from '../providers/constants.js';
 import { logger } from '../logger.js';
 import {
   createSvgUse,
   createIllustration,
-  formatCurrency,
+  formatPrice,
+  formatLocalDateTime,
   formatCountdown,
   formatTimeAgo,
   formatTimeUntil
@@ -21,7 +32,9 @@ const RELEVANT_STORAGE_KEYS = new Set([
   STORAGE_KEYS.SETTINGS,
   STORAGE_KEYS.HISTORY,
   STORAGE_KEYS.CURRENT_OFFERS,
-  STORAGE_KEYS.META
+  STORAGE_KEYS.META,
+  STORAGE_KEYS.REGION,
+  STORAGE_KEYS.FX_RATES
 ]);
 
 const COVER_FALLBACK = '../../assets/cover-fallback.svg';
@@ -97,22 +110,31 @@ function buildStatusBadge(item, isChecking) {
   return span;
 }
 
-function formatPriceElement(item) {
+function formatPriceElement(item, priceContext) {
   const wrap = document.createElement('span');
   wrap.className = 'price-pair';
-  const numVal = Number(item.originalPriceValue ?? 0);
-  const oldLabel = numVal > 0 ? formatCurrency(numVal, item.currency) : (item.originalPrice || '');
-  if (oldLabel && oldLabel !== '$0.00') {
+  const priceState = formatOfferPriceState(item, priceContext);
+
+  if (priceState.available) {
     const del = document.createElement('del');
     del.className = 'price-old';
-    del.textContent = oldLabel;
+    del.textContent = priceState.approx ? `~${priceState.formatted}` : priceState.formatted;
+    if (priceState.conversionNote) {
+      del.title = priceState.conversionNote;
+    }
     wrap.appendChild(del);
+  } else {
+    const unavail = document.createElement('span');
+    unavail.className = 'price-unavailable';
+    unavail.textContent = priceState.label;
+    wrap.appendChild(unavail);
   }
+
   const free = document.createElement('span');
   free.className = 'price-free';
   free.textContent = 'Free';
   wrap.appendChild(free);
-  return wrap;
+  return { element: wrap, priceState };
 }
 
 function formatHumanReason(item) {
@@ -132,7 +154,7 @@ function formatHumanReason(item) {
   return item.reason;
 }
 
-function createOfferRow(item, mode, isChecking) {
+function createOfferRow(item, mode, isChecking, priceContext) {
   const row = document.createElement('article');
   row.className = 'offer-row';
 
@@ -176,16 +198,29 @@ function createOfferRow(item, mode, isChecking) {
     meta.appendChild(dlc);
   }
 
-  meta.appendChild(formatPriceElement(item));
+  const { element: priceEl, priceState } = formatPriceElement(item, priceContext);
+  meta.appendChild(priceEl);
 
   const timing = document.createElement('span');
+  const nowMs = Date.now();
   if (mode === 'claimed' && item.claimedAt) {
-    timing.textContent = `Claimed ${formatTimeAgo(item.claimedAt)}`;
+    timing.textContent = `Claimed ${formatTimeAgo(item.claimedAt, nowMs, priceContext.locale)}`;
+    timing.title = formatLocalDateTime(item.claimedAt, priceContext.locale);
   } else {
-    timing.textContent = formatCountdown(item.endDate);
+    timing.textContent = formatCountdown(item.endDate, nowMs, priceContext.locale);
+    if (item.endDate) {
+      timing.title = formatLocalDateTime(item.endDate, priceContext.locale);
+    }
   }
   meta.appendChild(timing);
   main.appendChild(meta);
+
+  if (priceState.conversionNote) {
+    const approxNote = document.createElement('p');
+    approxNote.className = 'price-approx-note';
+    approxNote.textContent = priceState.conversionNote;
+    main.appendChild(approxNote);
+  }
 
   const statusLine = document.createElement('div');
   statusLine.className = 'offer-status-line';
@@ -322,17 +357,21 @@ async function renderStateBox(container, { illusId, title, desc, actionLabel, on
   container.appendChild(box);
 }
 
-function buildStatusSummary(settings, meta, alarm) {
+function buildStatusSummary(settings, meta, alarm, locale) {
   if (settings.paused) {
-    return `Last checked ${formatTimeAgo(meta.lastCheckedAt)} · Automation paused`;
+    return `Last checked ${formatTimeAgo(meta.lastCheckedAt, Date.now(), locale)} · Automation paused`;
   }
   if (meta.isChecking) {
     return 'Checking enabled stores for free offers…';
   }
   const hasAuto = Object.values(settings.stores || {}).some((s) => s?.enabled && s?.mode === 'auto');
   const modeLabel = hasAuto ? 'Auto-claim on' : 'Notify-only mode';
-  const lastText = meta.lastCheckedAt ? `Last checked ${formatTimeAgo(meta.lastCheckedAt)}` : 'Not checked yet';
-  const nextText = alarm?.scheduledTime ? `Next check in ${formatTimeUntil(alarm.scheduledTime)}` : 'Schedule ready';
+  const lastText = meta.lastCheckedAt
+    ? `Last checked ${formatTimeAgo(meta.lastCheckedAt, Date.now(), locale)}`
+    : 'Not checked yet';
+  const nextText = alarm?.scheduledTime
+    ? `Next check ${formatTimeUntil(alarm.scheduledTime, Date.now(), locale)}`
+    : 'Schedule ready';
   return `${lastText} · ${nextText} · ${modeLabel}`;
 }
 
@@ -347,14 +386,39 @@ async function triggerCheck() {
 }
 
 async function render() {
-  const [settings, historyMap, currentOffers, meta, alarm, logs] = await Promise.all([
+  const [settings, historyMap, currentOffers, meta, storedRegion, cachedFx, alarm, logs] = await Promise.all([
     getSettings(),
     getHistory(),
     getCurrentOffers(),
     getMeta(),
+    getRegionState(),
+    getCachedFxRates(),
     chrome.alarms?.get ? chrome.alarms.get('claimit_check_alarm').catch(() => null) : Promise.resolve(null),
     logger.getAll().catch(() => [])
   ]);
+
+  const region = resolveRegionAndCurrency({ settings, storedRegion });
+  const allHistory = Object.values(historyMap);
+  const needsFx = [...currentOffers, ...allHistory].some((item) => {
+    const cur = normalizeCurrencyCode(item?.currencyCode ?? item?.currency);
+    return cur && cur !== region.currency;
+  });
+
+  let fxEntry = cachedFx;
+  if (
+    needsFx &&
+    (!cachedFx?.rates || !Number.isFinite(cachedFx.fetchedAtMs) || Date.now() - cachedFx.fetchedAtMs >= FX_CACHE_TTL_MS)
+  ) {
+    fxEntry = await getExchangeRates({
+      cached: cachedFx,
+      saveCacheFn: setCachedFxRates
+    }).catch(() => cachedFx);
+  }
+  const priceContext = {
+    displayCurrency: region.currency,
+    locale: region.locale,
+    rates: fxEntry?.rates || null
+  };
 
   const paused = Boolean(settings.paused);
   els.pauseBtn.setAttribute('aria-checked', String(paused));
@@ -368,7 +432,7 @@ async function render() {
   els.dryRunBadge.classList.toggle('hidden', !settings.dryRun);
   els.checkNowBtn.disabled = Boolean(meta.isChecking || paused);
   els.checkNowLabel.textContent = meta.isChecking ? 'Checking…' : 'Check now';
-  els.statusLine.textContent = lastIpcError || buildStatusSummary(settings, meta, alarm);
+  els.statusLine.textContent = lastIpcError || buildStatusSummary(settings, meta, alarm, region.locale);
 
   const recentFetchErr = logs
     .slice(-10)
@@ -419,13 +483,12 @@ async function render() {
     const list = document.createElement('div');
     list.className = 'offer-list';
     for (const offer of currentOffers) {
-      list.appendChild(createOfferRow(offer, 'free', meta.isChecking));
+      list.appendChild(createOfferRow(offer, 'free', meta.isChecking, priceContext));
     }
     els.tabFree.appendChild(list);
   }
 
   // Tab 2: Claimed (excludes dry-run and pre-existing owned items)
-  const allHistory = Object.values(historyMap);
   const claimed = allHistory
     .filter((h) => h.status === CLAIM_STATUS.CLAIMED && !h.dryRun && !h.alreadyOwned)
     .sort((a, b) => Date.parse(b.claimedAt || b.updatedAt || 0) - Date.parse(a.claimedAt || a.updatedAt || 0));
@@ -442,9 +505,12 @@ async function render() {
       onAction: triggerCheck
     });
   } else {
-    const saved = computeValueSaved(historyMap);
+    const saved = computeValueSaved(historyMap, region.currency, priceContext.rates);
     const strip = document.createElement('div');
     strip.className = 'value-strip';
+
+    const stripTop = document.createElement('div');
+    stripTop.className = 'value-strip-top';
 
     const lbl = document.createElement('span');
     lbl.className = 'value-label';
@@ -455,21 +521,44 @@ async function render() {
 
     const val = document.createElement('span');
     val.className = 'value-amount tabular';
-    const extraCurrencies = Object.entries(saved.totalsByCurrency || {})
-      .filter(([cur]) => cur !== saved.currency)
-      .map(([cur, amt]) => formatCurrency(amt, cur));
-    const primaryFormatted = formatCurrency(saved.totalMajor, saved.currency);
-    val.textContent = extraCurrencies.length
-      ? `${primaryFormatted} + ${extraCurrencies.join(', ')}`
-      : primaryFormatted;
+    const unconvertedParts = Object.entries(saved.unconvertedTotals || {}).map(
+      ([cur, amt]) => formatPrice(amt, cur, region.locale)
+    );
+    if (saved.totalMajor > 0) {
+      const formattedTotal = formatPrice(saved.totalMajor, saved.currency, region.locale);
+      const displayTotal = saved.hasConverted ? `~${formattedTotal}` : formattedTotal;
+      val.textContent = unconvertedParts.length
+        ? `${displayTotal} + ${unconvertedParts.join(' + ')}`
+        : displayTotal;
+    } else if (unconvertedParts.length > 0) {
+      val.textContent = unconvertedParts.join(' + ');
+    } else {
+      val.textContent = 'Price unavailable';
+    }
 
-    strip.append(lbl, val);
+    stripTop.append(lbl, val);
+    strip.appendChild(stripTop);
+
+    if (saved.hasConverted && saved.sourceCurrencies?.length) {
+      const noteText = `Converted from ${saved.sourceCurrencies.join(', ')} at today's rate.`;
+      val.title = noteText;
+      const note = document.createElement('span');
+      note.className = 'value-note';
+      note.textContent = noteText;
+      strip.appendChild(note);
+    } else if (unconvertedParts.length > 0) {
+      const note = document.createElement('span');
+      note.className = 'value-note';
+      note.textContent = 'Exchange rates unavailable; showing original store currencies.';
+      strip.appendChild(note);
+    }
+
     els.tabClaimed.appendChild(strip);
 
     const list = document.createElement('div');
     list.className = 'offer-list';
     for (const item of claimed) {
-      list.appendChild(createOfferRow(item, 'claimed', false));
+      list.appendChild(createOfferRow(item, 'claimed', false, priceContext));
     }
     els.tabClaimed.appendChild(list);
   }
@@ -492,7 +581,7 @@ async function render() {
     const list = document.createElement('div');
     list.className = 'offer-list';
     for (const item of issues) {
-      list.appendChild(createOfferRow(item, 'issues', false));
+      list.appendChild(createOfferRow(item, 'issues', false, priceContext));
     }
     els.tabIssues.appendChild(list);
   }
