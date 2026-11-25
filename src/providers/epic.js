@@ -60,7 +60,7 @@
  * - `discountSetting.discountPercentage` represents % of original price PAID (0 === 100% off!).
  * - Regional pricing: passing `&locale=en-IN&country=IN&allowCountries=IN` returns
  *   `price.totalPrice` in minor units for INR (`originalPrice: 46900`, `currencyCode: "INR"`,
- *   `currencyInfo: { decimals: 2 }`); omitting `country` defaults to US/USD (`1999`),
+ *   `currencyInfo: { decimals: 2 }`); omitting `country` returns default catalog pricing,
  *   and zero-decimal regions like `country=JP` return `decimals: 0` (`originalPrice: 2080`).
  * - Active partial discounts (e.g. discountPercentage: 70) and F2P items (originalPrice: 0)
  *   can also appear in elements[], so both active promo checks and classifier checks are vital.

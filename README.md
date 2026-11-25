@@ -34,6 +34,7 @@ claimit-extension/
 ├── src/
 │   ├── background.js          # MV3 service worker, alarms, lifecycle, notification handlers
 │   ├── classifier.js          # Pure offer classification logic
+│   ├── currency.js            # Region detection, 24h FX rate cache & Intl formatting
 │   ├── engine.js              # Check cycle, rate limit, timeout, dry-run, pause abort
 │   ├── logger.js              # 200-entry structured ring buffer in chrome.storage.local
 │   ├── notifications.js       # Chrome, Telegram, and Discord notification dispatcher
@@ -87,6 +88,7 @@ ClaimIt requests the minimum permissions required for MV3 operation:
 - `https://store.epicgames.com/*` and `https://payment-website-pci.ol.epicgames.com/*`: Inspects Epic store pages and interacts with Epic's checkout modal/iframe during auto-claim.
 - `https://store.steampowered.com/*`: Queries Steam's free specials search results, `appdetails`, `dynamicstore/userdata/`, and interacts with Steam app pages.
 - `https://raw.githubusercontent.com/*`: Fetches user-configured remote `selectors.json` updates.
+- `https://open.er-api.com/*`: Fetches keyless daily exchange rates (`USD` base, cached for 24 h in `chrome.storage.local`) only as a fallback when a store returns a currency different from your display currency.
 
 ### Optional Host Permissions
 
