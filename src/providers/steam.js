@@ -89,10 +89,10 @@ export function parseSteamSearchHtml(resultsHtml, endpoints = {}) {
     const hrefMatch = attrs.match(/href="([^"]+)"/i);
     if (!appIdMatch) continue;
 
-    // Skip multi-app bundles if multiple IDs are comma-separated unless no single ID exists
+    // Skip multi-app bundles where data-ds-appid contains multiple comma-separated IDs
     const rawAppIds = appIdMatch[1].split(',').map((s) => s.trim()).filter(Boolean);
+    if (rawAppIds.length !== 1) continue;
     const appId = rawAppIds[0];
-    if (!appId) continue;
 
     const titleMatch = body.match(/<span[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
     const imgMatch = body.match(/<div[^>]*class="[^"]*search_capsule[^"]*"[^>]*>\s*<img[^>]*src="([^"]+)"/i);
@@ -175,8 +175,8 @@ export function parseSteamDbFreeHtml(html) {
       title,
       url: `https://store.steampowered.com/app/${appId}/`,
       image: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`,
-      originalPrice: isKeep ? 1 : 0,
-      originalPriceFormatted: 'Free promotion',
+      originalPrice: 0,
+      originalPriceFormatted: '',
       discountPrice: 0,
       discountPercent: isKeep ? 100 : 0,
       currency: 'USD',
@@ -220,7 +220,7 @@ async function enrichFromAppDetails(offer) {
       : offer.discountPrice;
     const discountPercent = priceOverview
       ? Number(priceOverview.discount_percent ?? offer.discountPercent)
-      : offer.discountPercent;
+      : 0;
 
     return {
       ...offer,
@@ -391,8 +391,13 @@ export async function claim(offer, context = {}) {
     let state = null;
     let ageGateAttempted = false;
 
-    for (let attempt = 0; attempt < 15; attempt++) {
+    for (let attempt = 0; attempt < 10; attempt++) {
       if (signal?.aborted) throw new Error('timeout');
+
+      const tabInfo = await chrome.tabs.get(tab.id);
+      if (/steampowered\.com\/login/i.test(tabInfo.url || '')) {
+        return await handoffToUser('Login required on Steam');
+      }
 
       const frames = await listTabFrames(tab.id);
       const topFrame = frames.find((f) => f.isTop);
@@ -405,7 +410,7 @@ export async function claim(offer, context = {}) {
         tab.id,
         topFrame.frameId,
         STEAM_CONTENT_SCRIPT,
-        { action: 'STEAM_INSPECT_PAGE', config: steamCfg },
+        { action: 'STEAM_INSPECT_PAGE', config: steamCfg, waitMs: 1200 },
         signal
       );
 
@@ -430,7 +435,6 @@ export async function claim(offer, context = {}) {
       }
 
       if (state?.ready) break;
-      await delay(900, signal);
     }
 
     if (!state) {
