@@ -13,7 +13,7 @@ function isNonEmptyString(val) {
 }
 
 function isStringArray(val) {
-  return Array.isArray(val) && val.every((item) => typeof item === 'string');
+  return Array.isArray(val) && val.every((item) => isNonEmptyString(item));
 }
 
 function isStringRecord(val) {
@@ -45,8 +45,8 @@ export function validateSelectorsConfig(candidate) {
       errors.push(`stores.${storeId} must be an object`);
       continue;
     }
-    if (!isStringRecord(store.endpoints)) {
-      errors.push(`stores.${storeId}.endpoints must be an object`);
+    if (!isStringRecord(store.endpoints) || Object.keys(store.endpoints).length === 0) {
+      errors.push(`stores.${storeId}.endpoints must be a non-empty object`);
     } else {
       for (const [k, url] of Object.entries(store.endpoints)) {
         if (!isNonEmptyString(url) || !url.startsWith('https://')) {
@@ -54,21 +54,21 @@ export function validateSelectorsConfig(candidate) {
         }
       }
     }
-    if (!isStringRecord(store.selectors)) {
-      errors.push(`stores.${storeId}.selectors must be an object`);
+    if (!isStringRecord(store.selectors) || Object.keys(store.selectors).length === 0) {
+      errors.push(`stores.${storeId}.selectors must be a non-empty object`);
     } else {
       for (const [k, arr] of Object.entries(store.selectors)) {
         if (!isStringArray(arr) || arr.length === 0) {
-          errors.push(`stores.${storeId}.selectors.${k} must be a non-empty string array`);
+          errors.push(`stores.${storeId}.selectors.${k} must be a non-empty array of non-empty strings`);
         }
       }
     }
-    if (!isStringRecord(store.texts)) {
-      errors.push(`stores.${storeId}.texts must be an object`);
+    if (!isStringRecord(store.texts) || Object.keys(store.texts).length === 0) {
+      errors.push(`stores.${storeId}.texts must be a non-empty object`);
     } else {
       for (const [k, arr] of Object.entries(store.texts)) {
         if (!isStringArray(arr) || arr.length === 0) {
-          errors.push(`stores.${storeId}.texts.${k} must be a non-empty string array`);
+          errors.push(`stores.${storeId}.texts.${k} must be a non-empty array of non-empty strings`);
         }
       }
     }
