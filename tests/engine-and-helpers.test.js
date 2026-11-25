@@ -161,11 +161,11 @@ test('buildTelegramPayload and buildDiscordPayload format NEEDS_USER and FAILED 
   };
   const tg = buildTelegramPayload(offer, 'NEEDS_USER', 'Captcha required', '12345');
   assert.equal(tg.chat_id, '12345');
-  assert.match(tg.text, /Sample Game \[DLC\] is free on Epic Games Store/);
+  assert.match(tg.text, /Sample Game \[DLC\]: Free on Epic Games Store/);
   assert.equal(tg.reply_markup.inline_keyboard[0][0].url, offer.url);
 
   const dc = buildDiscordPayload(offer, 'FAILED', 'timeout');
-  assert.match(dc.embeds[0].title, /ClaimIt failed/);
+  assert.match(dc.embeds[0].title, /Sample Game \[DLC\]/);
   assert.match(dc.embeds[0].description, /timeout/);
 });
 
@@ -279,7 +279,8 @@ test('Mocked chrome.* background cycles cover CLAIMED, NEEDS_USER, FAILED, notif
     });
     const lastNotif = createdNotifications.at(-1);
     assert.equal(lastNotif.options.requireInteraction, true);
-    assert.match(lastNotif.options.title, /Captcha Game is free on Epic Games Store — claim it now/);
+    assert.equal(lastNotif.options.title, 'Captcha Game');
+    assert.match(lastNotif.options.message, /Free on Epic Games Store\. Captcha required/);
     assert.equal(lastNotif.options.buttons[0].title, 'Claim now');
 
     // Same cycle dedup check via notifyOfferOutcome directly
