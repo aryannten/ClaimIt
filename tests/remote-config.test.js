@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import { validateSelectorsConfig, mergeConfigs } from '../src/remote-config.js';
+import { validateSelectorsConfig, mergeConfigs, getSelectorsConfig } from '../src/remote-config.js';
 
 test('bundled config/selectors.json passes schema validation', async () => {
   const raw = await fs.readFile(new URL('../config/selectors.json', import.meta.url), 'utf8');
@@ -10,9 +10,10 @@ test('bundled config/selectors.json passes schema validation', async () => {
   assert.equal(res.valid, true, `Validation errors: ${res.errors.join(', ')}`);
 });
 
-test('validateSelectorsConfig rejects invalid schemas', () => {
+test('validateSelectorsConfig rejects invalid schemas, whitespace strings, and empty sections', () => {
   assert.equal(validateSelectorsConfig(null).valid, false);
   assert.equal(validateSelectorsConfig({ version: 0, stores: {} }).valid, false);
+
   const badUrl = validateSelectorsConfig({
     version: 1,
     stores: {
@@ -29,6 +30,23 @@ test('validateSelectorsConfig rejects invalid schemas', () => {
     }
   });
   assert.equal(badUrl.valid, false);
+
+  const whitespaceSelector = validateSelectorsConfig({
+    version: 1,
+    stores: {
+      epic: {
+        endpoints: { promotions: 'https://store.epicgames.com/test' },
+        selectors: { getButton: ['   '] },
+        texts: { getButton: ['get'] }
+      },
+      steam: {
+        endpoints: { searchResults: 'https://store.steampowered.com/search' },
+        selectors: {},
+        texts: { addToAccount: ['add'] }
+      }
+    }
+  });
+  assert.equal(whitespaceSelector.valid, false);
 });
 
 test('mergeConfigs preserves bundled keys while applying remote overrides', async () => {
@@ -50,8 +68,7 @@ test('mergeConfigs preserves bundled keys while applying remote overrides', asyn
   assert.ok(merged.stores.steam.endpoints.searchResults.startsWith('https://'));
 });
 
-test('getSelectorsConfig fetches remote config, caches, and falls back to cache/bundled on failure', async () => {
-  const { getSelectorsConfig } = await import('../src/remote-config.js');
+test('getSelectorsConfig handles valid remote JSON, invalid JSON, schema mismatch, and network error fallbacks', async () => {
   const raw = await fs.readFile(new URL('../config/selectors.json', import.meta.url), 'utf8');
   const validRemote = JSON.parse(raw);
   validRemote.version = 99;
@@ -77,7 +94,29 @@ test('getSelectorsConfig fetches remote config, caches, and falls back to cache/
 
   const origFetch = globalThis.fetch;
   try {
-    // 1. Valid remote fetch
+    // 1. Invalid JSON with no cache falls back to bundled
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('raw.githubusercontent.com')) {
+        return new Response('{not valid json', { status: 200 });
+      }
+      return new Response(raw, { status: 200 });
+    };
+    const resInvalidJson = await getSelectorsConfig({ forceRefresh: true });
+    assert.equal(resInvalidJson.source, 'bundled');
+    assert.ok(resInvalidJson.error);
+
+    // 2. Schema mismatch with no cache falls back to bundled
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('raw.githubusercontent.com')) {
+        return new Response(JSON.stringify({ version: -1 }), { status: 200 });
+      }
+      return new Response(raw, { status: 200 });
+    };
+    const resBadSchema = await getSelectorsConfig({ forceRefresh: true });
+    assert.equal(resBadSchema.source, 'bundled');
+    assert.match(resBadSchema.error, /Schema validation failed/);
+
+    // 3. Valid remote fetch caches and merges
     globalThis.fetch = async (url) => {
       if (String(url).includes('raw.githubusercontent.com')) {
         return new Response(JSON.stringify(validRemote), { status: 200 });
@@ -89,12 +128,14 @@ test('getSelectorsConfig fetches remote config, caches, and falls back to cache/
     assert.equal(resRemote.config.version, 99);
     assert.deepEqual(resRemote.config.stores.epic.selectors.getButton, ['button.remote-get']);
 
-    // 2. Network error falls back to cache
-    globalThis.fetch = async () => new Response('Not Found', { status: 404 });
+    // 4. Network error falls back to valid cache
+    globalThis.fetch = async () => {
+      throw new Error('Network offline');
+    };
     const resFallback = await getSelectorsConfig({ forceRefresh: true });
     assert.equal(resFallback.source, 'cache');
     assert.equal(resFallback.config.version, 99);
-    assert.match(resFallback.error, /HTTP 404/);
+    assert.match(resFallback.error, /Network offline/);
   } finally {
     globalThis.fetch = origFetch;
     delete globalThis.chrome;
