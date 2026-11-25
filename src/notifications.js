@@ -78,9 +78,9 @@ async function fetchCoverDataUrl(imageUrl) {
 
 function getBundledIconUrl() {
   if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
-    return chrome.runtime.getURL('assets/icon-128.png');
+    return chrome.runtime.getURL('assets/notification-icon.png');
   }
-  return 'assets/icon-128.png';
+  return 'assets/notification-icon.png';
 }
 
 async function saveNotificationTarget(notificationId, target) {
@@ -167,6 +167,14 @@ async function createChromeNotification(notificationId, options, coverDataUrl) {
   });
 }
 
+function formatUntilLabel(endDate) {
+  if (!endDate) return '';
+  const ts = Date.parse(endDate);
+  if (!Number.isFinite(ts)) return '';
+  const formatted = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(ts));
+  return ` until ${formatted}`;
+}
+
 /**
  * Format Telegram Bot API payload for NEEDS_USER or FAILED alerts.
  * @param {object} offer
@@ -177,11 +185,12 @@ async function createChromeNotification(notificationId, options, coverDataUrl) {
 export function buildTelegramPayload(offer, status, reason, chatId) {
   const storeName = offer.storeName || offer.store;
   const dlcTag = offer.label === 'DLC' ? ' [DLC]' : '';
+  const until = formatUntilLabel(offer.endDate);
   const priceNote = offer.originalPriceFormatted ? ` (normally ${offer.originalPriceFormatted})` : '';
   const text =
     status === CLAIM_STATUS.NEEDS_USER
-      ? `🎮 ${offer.title}${dlcTag} is free on ${storeName}${priceNote} — claim it now!\nReason: ${reason || 'Action required'}\n${offer.url}`
-      : `⚠️ ClaimIt failed on ${storeName} for ${offer.title}${dlcTag}\nReason: ${reason || 'Unknown error'}\n${offer.url}`;
+      ? `${offer.title}${dlcTag}: Free on ${storeName}${until}${priceNote}. ${reason || 'Needs you to claim.'}\n${offer.url}`
+      : `ClaimIt failed on ${storeName} for ${offer.title}${dlcTag}. Reason: ${reason || 'Unknown error'}.\n${offer.url}`;
 
   const payload = {
     chat_id: chatId,
@@ -207,22 +216,21 @@ export function buildTelegramPayload(offer, status, reason, chatId) {
 export function buildDiscordPayload(offer, status, reason) {
   const storeName = offer.storeName || offer.store;
   const dlcTag = offer.label === 'DLC' ? ' [DLC]' : '';
+  const until = formatUntilLabel(offer.endDate);
   const isNeedsUser = status === CLAIM_STATUS.NEEDS_USER;
 
   return {
     username: 'ClaimIt',
     embeds: [
       {
-        title: isNeedsUser
-          ? `${offer.title}${dlcTag} is free on ${storeName} — claim it now`
-          : `ClaimIt failed: ${offer.title}${dlcTag} (${storeName})`,
+        title: `${offer.title}${dlcTag}`,
         url: offer.url,
         description: isNeedsUser
-          ? `Normally ${offer.originalPriceFormatted || 'paid'}. Action needed: **${reason || 'Claim manually'}**`
-          : `Could not auto-claim. Reason: **${reason || 'Unknown error'}**`,
-        color: isNeedsUser ? 0x10b981 : 0xef4444,
+          ? `Free on ${storeName}${until}. ${reason || 'Needs you to claim.'}`
+          : `Could not claim on ${storeName}. Reason: ${reason || 'Unknown error'}.`,
+        color: isNeedsUser ? 0x16a34a : 0xdc2626,
         thumbnail: offer.image ? { url: offer.image } : undefined,
-        footer: { text: `ClaimIt • ${storeName}` },
+        footer: { text: `ClaimIt · ${storeName}` },
         timestamp: new Date().toISOString()
       }
     ]
@@ -352,11 +360,12 @@ export async function notifyOfferOutcome({
     const coverDataUrl = await fetchCoverDataUrl(offer.image);
 
     try {
+      const until = formatUntilLabel(offer.endDate);
       if (status === CLAIM_STATUS.CLAIMED) {
-        const title = dryRun ? `Dry-run: ${offer.title}${dlcTag}` : `Claimed on ${storeName}`;
+        const title = dryRun ? `Dry-run: ${offer.title}${dlcTag}` : `${offer.title}${dlcTag}`;
         const message = dryRun
-          ? `Would claim ${offer.title}${pricePart} on ${storeName}.`
-          : `${offer.title}${dlcTag}${pricePart} was added to your ${storeName} account.`;
+          ? `Dry-run completed on ${storeName}${pricePart}. No claim clicked.`
+          : `Claimed on ${storeName}${pricePart}.`;
 
         await createChromeNotification(
           notificationId,
@@ -374,8 +383,8 @@ export async function notifyOfferOutcome({
         await createChromeNotification(
           notificationId,
           {
-            title: `${offer.title}${dlcTag} is free on ${storeName} — claim it now`,
-            message: `${reason ? `${reason}. ` : ''}Normally ${offer.originalPriceFormatted || 'paid'}. Click "Claim now" to finish claiming.`,
+            title: `${offer.title}${dlcTag}`,
+            message: `Free on ${storeName}${until}. ${reason ? `${reason}. ` : ''}Needs you to claim.`,
             contextMessage: storeName,
             buttons: [{ title: 'Claim now' }, { title: 'Dismiss' }],
             requireInteraction: true,
@@ -387,8 +396,8 @@ export async function notifyOfferOutcome({
         await createChromeNotification(
           notificationId,
           {
-            title: `ClaimIt failed on ${storeName}`,
-            message: `${offer.title}${dlcTag}: ${reason || 'Unknown error'}`,
+            title: `${offer.title}${dlcTag}`,
+            message: `Could not claim on ${storeName}: ${reason || 'Unknown error'}.`,
             contextMessage: storeName,
             buttons: [{ title: 'Claim now' }, { title: 'Dismiss' }],
             requireInteraction: false,

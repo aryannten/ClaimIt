@@ -1,6 +1,6 @@
 # ClaimIt
 
-ClaimIt is a Chrome Manifest V3 browser extension that monitors Epic Games Store and Steam for limited-time free-to-keep game promotions and automatically claims eligible offers using your existing logged-in browser session. When an offer cannot be auto-claimed—such as when a store requires login, age verification, region confirmation, or CAPTCHA solving—ClaimIt alerts you via Chrome, Telegram, or Discord notifications with a one-click link to finish claiming the game directly.
+ClaimIt is a Chrome Manifest V3 browser extension that monitors Epic Games Store and Steam for limited-time free-to-keep game promotions and automatically claims eligible offers using your existing logged-in browser session. When an offer cannot be auto-claimed (such as when a store requires login, age verification, region confirmation, or CAPTCHA solving), ClaimIt alerts you via Chrome, Telegram, or Discord notifications with a one-click link to finish claiming the game directly.
 
 ## Features
 
@@ -20,9 +20,17 @@ claimit-extension/
 ├── config/
 │   └── selectors.json
 ├── assets/
+│   ├── cover-fallback.svg
 │   ├── icon-16.png
+│   ├── icon-32.png
 │   ├── icon-48.png
-│   └── icon-128.png
+│   ├── icon-128.png
+│   ├── icons.svg
+│   ├── illustrations.svg
+│   ├── logo.svg
+│   ├── notification-icon.png
+│   ├── stores.svg
+│   └── wordmark.svg
 ├── src/
 │   ├── background.js          # MV3 service worker, alarms, lifecycle, notification handlers
 │   ├── classifier.js          # Pure offer classification logic
@@ -44,6 +52,10 @@ claimit-extension/
 │   │   ├── prime-gaming.js    # Stub (disabled)
 │   │   ├── fab.js             # Stub (disabled)
 │   │   └── itch.js            # Stub (disabled)
+│   ├── styles/
+│   │   └── tokens.css         # Shared light/dark CSS design tokens
+│   ├── ui/
+│   │   └── ui-helpers.js      # SVG sprite/illustration mounting & Intl formatters
 │   ├── popup/
 │   │   ├── popup.html / .css / .js
 │   └── options/
