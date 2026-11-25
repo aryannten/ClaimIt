@@ -69,9 +69,13 @@ function renderStores(settings) {
     toggle.checked = !isStub && Boolean(storeCfg.enabled);
     toggle.disabled = isStub;
     toggle.addEventListener('change', async () => {
+      const current = await getSettings();
       await saveSettings({
         stores: {
-          [provider.id]: { ...storeCfg, enabled: toggle.checked }
+          [provider.id]: {
+            ...current.stores[provider.id],
+            enabled: toggle.checked
+          }
         }
       });
       flashStatus('Saved');
@@ -167,18 +171,34 @@ async function saveNotificationFields() {
   flashStatus('Saved');
 }
 
+async function sendBgMessage(payload) {
+  try {
+    const res = await chrome.runtime.sendMessage(payload);
+    if (res && res.ok === false) {
+      flashStatus(res.error || 'Request failed', true);
+      return null;
+    }
+    return res;
+  } catch (err) {
+    flashStatus(err instanceof Error ? err.message : String(err), true);
+    return null;
+  }
+}
+
 els.checkIntervalHours.addEventListener('change', async () => {
   const hours = Math.max(1, Math.min(168, Number(els.checkIntervalHours.value) || 6));
   els.checkIntervalHours.value = String(hours);
   await saveSettings({ checkIntervalHours: hours });
-  await chrome.runtime.sendMessage({ type: 'CLAIMIT_RESCHEDULE' });
-  flashStatus('Schedule updated');
+  if (await sendBgMessage({ type: 'CLAIMIT_RESCHEDULE' })) {
+    flashStatus('Schedule updated');
+  }
 });
 
 els.thuFriBoost.addEventListener('change', async () => {
   await saveSettings({ thursdayFridayHourlyBoost: els.thuFriBoost.checked });
-  await chrome.runtime.sendMessage({ type: 'CLAIMIT_RESCHEDULE' });
-  flashStatus('Schedule updated');
+  if (await sendBgMessage({ type: 'CLAIMIT_RESCHEDULE' })) {
+    flashStatus('Schedule updated');
+  }
 });
 
 els.dryRunToggle.addEventListener('change', async () => {
@@ -257,7 +277,7 @@ els.remoteConfigUrl.addEventListener('change', async () => {
 
 els.refreshConfigBtn.addEventListener('click', async () => {
   await saveSettings({ remoteConfigUrl: els.remoteConfigUrl.value.trim() });
-  const res = await chrome.runtime.sendMessage({ type: 'CLAIMIT_REFRESH_REMOTE_CONFIG' });
+  const res = await sendBgMessage({ type: 'CLAIMIT_REFRESH_REMOTE_CONFIG' });
   if (res?.ok && res.data) {
     const { source, error } = res.data;
     els.remoteConfigStatus.textContent = error
@@ -268,17 +288,22 @@ els.refreshConfigBtn.addEventListener('click', async () => {
 });
 
 els.clearHistoryBtn.addEventListener('click', async () => {
-  await chrome.runtime.sendMessage({ type: 'CLAIMIT_CLEAR_HISTORY' });
-  flashStatus('History cleared');
+  if (await sendBgMessage({ type: 'CLAIMIT_CLEAR_HISTORY' })) {
+    flashStatus('History cleared');
+  }
 });
 
 els.logLevelFilter.addEventListener('change', renderLogs);
 els.refreshLogsBtn.addEventListener('click', renderLogs);
 
 els.copyLogsBtn.addEventListener('click', async () => {
-  const logs = await logger.getAll();
-  await navigator.clipboard.writeText(JSON.stringify(logs, null, 2));
-  flashStatus('Logs copied');
+  try {
+    const logs = await logger.getAll();
+    await navigator.clipboard.writeText(JSON.stringify(logs, null, 2));
+    flashStatus('Logs copied');
+  } catch {
+    flashStatus('Clipboard copy failed', true);
+  }
 });
 
 els.clearLogsBtn.addEventListener('click', async () => {
