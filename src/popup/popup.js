@@ -25,7 +25,7 @@ import {
   formatLocalDateTime,
   formatCountdown,
   formatTimeAgo,
-  formatTimeUntil
+  formatRoughNextScan
 } from '../ui/ui-helpers.js';
 
 const RELEVANT_STORAGE_KEYS = new Set([
@@ -358,28 +358,32 @@ async function renderStateBox(container, { illusId, title, desc, actionLabel, on
 }
 
 function buildStatusSummary(settings, meta, alarm, locale) {
+  const lastAt = meta.lastScanAt || meta.lastCheckedAt;
   if (settings.paused) {
-    return `Last checked ${formatTimeAgo(meta.lastCheckedAt, Date.now(), locale)} · Automation paused`;
+    return `Last checked ${formatTimeAgo(lastAt, Date.now(), locale)} | Automation paused`;
   }
   if (meta.isChecking) {
     return 'Checking enabled stores for free offers…';
   }
-  const hasAuto = Object.values(settings.stores || {}).some((s) => s?.enabled && s?.mode === 'auto');
-  const modeLabel = hasAuto ? 'Auto-claim on' : 'Notify-only mode';
-  const lastText = meta.lastCheckedAt
-    ? `Last checked ${formatTimeAgo(meta.lastCheckedAt, Date.now(), locale)}`
+  const lastText = lastAt
+    ? `Last checked ${formatTimeAgo(lastAt, Date.now(), locale)}`
     : 'Not checked yet';
-  const nextText = alarm?.scheduledTime
-    ? `Next check ${formatTimeUntil(alarm.scheduledTime, Date.now(), locale)}`
-    : 'Schedule ready';
-  return `${lastText} · ${nextText} · ${modeLabel}`;
+  const nextAt = meta.nextScanAt || alarm?.scheduledTime || null;
+  const nextText = nextAt
+    ? `Next scan ${formatRoughNextScan(nextAt, Date.now(), locale)}`
+    : 'Next scan pending';
+  return `${lastText} | ${nextText}`;
 }
 
 async function triggerCheck() {
   els.checkNowBtn.disabled = true;
   els.checkNowLabel.textContent = 'Checking…';
   try {
-    await sendRuntimeMessage({ type: 'CLAIMIT_RUN_CHECK' });
+    const res = await sendRuntimeMessage({ type: 'CLAIMIT_RUN_CHECK' });
+    if (res?.data?.rateLimited) {
+      const waitMins = Math.max(1, Math.ceil((res.data.retryAfterMs || 60000) / 60000));
+      lastIpcError = `Please wait ${waitMins} min before checking manually again.`;
+    }
   } finally {
     await scheduleRender();
   }
@@ -660,3 +664,14 @@ chrome.storage?.onChanged?.addListener((changes, areaName) => {
 });
 
 scheduleRender();
+
+const countdownRefreshTimer = window.setInterval(() => {
+  scheduleRender();
+}, 60_000);
+
+function cleanupTimers() {
+  window.clearInterval(countdownRefreshTimer);
+}
+
+window.addEventListener('unload', cleanupTimers);
+window.addEventListener('pagehide', cleanupTimers);

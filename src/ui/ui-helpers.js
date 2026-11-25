@@ -85,9 +85,9 @@ export function formatCountdown(iso, nowMs = Date.now(), locale) {
  * @returns {string}
  */
 export function formatTimeAgo(iso, nowMs = Date.now(), locale) {
-  if (!iso) return 'Never';
+  if (!iso) return 'never';
   const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return 'Unknown';
+  if (!Number.isFinite(ts)) return 'unknown';
   const diffMs = ts - nowMs;
   if (Math.abs(diffMs) < 60000) return 'just now';
   if (Math.abs(diffMs) < 86400000) return formatRelativeDuration(diffMs, locale);
@@ -95,14 +95,35 @@ export function formatTimeAgo(iso, nowMs = Date.now(), locale) {
 }
 
 /**
- * Format next scheduled check duration using Intl.RelativeTimeFormat.
- * @param {number|null|undefined} scheduledMs
+ * Format the randomized next scan timestamp as a rough day + hour string with Intl
+ * (e.g. "tomorrow, around 2 pm").
+ * @param {string|number|null|undefined} isoOrMs
  * @param {number} [nowMs=Date.now()]
  * @param {string} [locale]
  * @returns {string}
  */
-export function formatTimeUntil(scheduledMs, nowMs = Date.now(), locale) {
-  if (!Number.isFinite(scheduledMs)) return 'unscheduled';
-  const diffMs = Math.max(60000, scheduledMs - nowMs);
-  return formatRelativeDuration(diffMs, locale);
+export function formatRoughNextScan(isoOrMs, nowMs = Date.now(), locale) {
+  const ts = typeof isoOrMs === 'number' ? isoOrMs : Date.parse(isoOrMs || '');
+  if (!Number.isFinite(ts)) return 'pending';
+  const roundedMs = Math.round(ts / 3600000) * 3600000;
+  const targetDate = new Date(roundedMs);
+  const nowDate = new Date(nowMs);
+  const dayStartNow = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate());
+  const dayStartTarget = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
+  const dayDiff = Math.round((dayStartTarget - dayStartNow) / 86400000);
+
+  try {
+    const dayLabel =
+      dayDiff === 0 || dayDiff === 1
+        ? new Intl.RelativeTimeFormat(locale || undefined, { numeric: 'auto' }).format(dayDiff, 'day')
+        : new Intl.DateTimeFormat(locale || undefined, {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric'
+          }).format(targetDate);
+    const hourLabel = new Intl.DateTimeFormat(locale || undefined, { hour: 'numeric' }).format(targetDate);
+    return `${dayLabel}, around ${hourLabel}`;
+  } catch {
+    return formatLocalDateTime(new Date(ts).toISOString(), locale);
+  }
 }
