@@ -16,7 +16,7 @@ export default [
   },
   {
     files: ['src/**/*.js'],
-    ignores: ['src/content/**', 'src/popup/**', 'src/options/**'],
+    ignores: ['src/content/**', 'src/popup/**', 'src/options/**', 'src/ui/**'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',
@@ -25,6 +25,7 @@ export default [
         fetch: 'readonly',
         AbortController: 'readonly',
         URL: 'readonly',
+        Intl: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
         btoa: 'readonly'
@@ -58,7 +59,7 @@ export default [
     rules: baseRules
   },
   {
-    files: ['src/popup/**/*.js', 'src/options/**/*.js'],
+    files: ['src/popup/**/*.js', 'src/options/**/*.js', 'src/ui/**/*.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',
@@ -68,6 +69,8 @@ export default [
         document: 'readonly',
         navigator: 'readonly',
         Option: 'readonly',
+        Intl: 'readonly',
+        fetch: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly'
       }
