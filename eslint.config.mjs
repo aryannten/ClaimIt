@@ -1,0 +1,93 @@
+import js from '@eslint/js';
+
+const baseRules = {
+  ...js.configs.recommended.rules,
+  'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+  'no-shadow': 'error',
+  'no-console': 'warn',
+  'no-promise-executor-return': 'error',
+  'no-unreachable-loop': 'error',
+  'no-template-curly-in-string': 'warn'
+};
+
+export default [
+  {
+    ignores: ['node_modules/**', 'assets/**', 'config/**']
+  },
+  {
+    files: ['src/**/*.js'],
+    ignores: ['src/content/**', 'src/popup/**', 'src/options/**'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'module',
+      globals: {
+        chrome: 'readonly',
+        fetch: 'readonly',
+        AbortController: 'readonly',
+        URL: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        btoa: 'readonly'
+      }
+    },
+    rules: baseRules
+  },
+  {
+    files: ['src/providers/tab-helpers.js'],
+    languageOptions: {
+      globals: {
+        window: 'readonly'
+      }
+    }
+  },
+  {
+    files: ['src/content/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: {
+        chrome: 'readonly',
+        window: 'readonly',
+        document: 'readonly',
+        Event: 'readonly',
+        MutationObserver: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly'
+      }
+    },
+    rules: baseRules
+  },
+  {
+    files: ['src/popup/**/*.js', 'src/options/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'module',
+      globals: {
+        chrome: 'readonly',
+        window: 'readonly',
+        document: 'readonly',
+        navigator: 'readonly',
+        Option: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly'
+      }
+    },
+    rules: baseRules
+  },
+  {
+    files: ['tests/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'module',
+      globals: {
+        fetch: 'readonly',
+        Response: 'readonly',
+        URL: 'readonly',
+        globalThis: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly'
+      }
+    },
+    rules: baseRules
+  }
+];
