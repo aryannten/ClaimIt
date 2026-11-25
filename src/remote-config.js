@@ -6,8 +6,6 @@
 import { getCachedRemoteConfig, setCachedRemoteConfig, getSettings } from './storage.js';
 import { logger } from './logger.js';
 
-let bundledConfigMemo = null;
-
 function isNonEmptyString(val) {
   return typeof val === 'string' && val.trim().length > 0;
 }
@@ -110,7 +108,6 @@ export function mergeConfigs(bundled, remote) {
  * @returns {Promise<object>}
  */
 async function loadBundledConfig() {
-  if (bundledConfigMemo) return bundledConfigMemo;
   const url = typeof chrome !== 'undefined' && chrome.runtime?.getURL
     ? chrome.runtime.getURL('config/selectors.json')
     : new URL('../config/selectors.json', import.meta.url).href;
@@ -118,8 +115,7 @@ async function loadBundledConfig() {
   if (!response.ok) {
     throw new Error(`Failed to load bundled selectors.json (${response.status})`);
   }
-  bundledConfigMemo = await response.json();
-  return bundledConfigMemo;
+  return response.json();
 }
 
 /**

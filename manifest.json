@@ -47,22 +47,5 @@
     "https://discord.com/*",
     "https://discordapp.com/*",
     "https://steamdb.info/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": [
-        "https://store.epicgames.com/*",
-        "https://payment-website-pci.ol.epicgames.com/*"
-      ],
-      "js": ["src/content/epic.js"],
-      "run_at": "document_idle",
-      "all_frames": true
-    },
-    {
-      "matches": ["https://store.steampowered.com/*"],
-      "js": ["src/content/steam.js"],
-      "run_at": "document_idle",
-      "all_frames": false
-    }
   ]
 }

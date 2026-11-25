@@ -26,7 +26,6 @@ import { logger } from './logger.js';
 
 const TARGETS_STORAGE_KEY = 'claimit_notification_targets';
 const MAX_IMAGE_BYTES = 1_500_000;
-let notificationSeq = 0;
 
 function redactSecrets(text) {
   return String(text || '')
@@ -408,8 +407,7 @@ export async function notifyOfferOutcome({
 
   // Chrome Notifications
   if (effectiveSettings?.notifications?.chrome !== false && typeof chrome !== 'undefined' && chrome.notifications) {
-    notificationSeq += 1;
-    const notificationId = `claimit:${key}:${Date.now()}-${notificationSeq}`;
+    const notificationId = `claimit:${key}:${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     await saveNotificationTarget(notificationId, {
       offerUrl: offer.url,
       store: offer.store,
