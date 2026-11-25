@@ -130,6 +130,7 @@ async function runCheckCycleInternal(options = {}) {
   const notifyFn = deps.notifyOfferOutcome || notifyOfferOutcome;
   const upsertHistoryFn = deps.upsertHistoryEntry || upsertHistoryEntry;
   const saveCurrentOffersFn = deps.setCurrentOffers || setCurrentOffers;
+  const loadCurrentOffersFn = deps.getCurrentOffers || getCurrentOffers;
   const updateMetaFn = deps.updateMeta || updateMeta;
   const timeoutMs = deps.claimTimeoutMs || CLAIM_TIMEOUT_MS;
   const interClaimDelayFn = deps.interClaimDelay || (() => humanDelay(1500, 3000));
@@ -137,7 +138,7 @@ async function runCheckCycleInternal(options = {}) {
   const settings = await loadSettings();
   if (settings.paused) {
     await logger.info('engine', `Skipped ${trigger} cycle because automation is paused`);
-    return { skipped: true, reason: 'paused', offers: await getCurrentOffers() };
+    return { skipped: true, reason: 'paused', offers: await loadCurrentOffersFn() };
   }
 
   const cycleId = `cycle-${Date.now()}`;

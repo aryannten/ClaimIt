@@ -76,88 +76,90 @@ async function openOrFocusNotificationTarget(notificationId) {
   }
 }
 
-chrome.runtime.onInstalled.addListener(async (details) => {
-  await logger.info('lifecycle', `Extension ${details.reason}`);
-  await getSettings();
-  await syncAlarmSchedule();
-  await runCheckCycle({ trigger: `install:${details.reason}` });
-});
+if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
+  chrome.runtime.onInstalled.addListener(async (details) => {
+    await logger.info('lifecycle', `Extension ${details.reason}`);
+    await getSettings();
+    await syncAlarmSchedule();
+    await runCheckCycle({ trigger: `install:${details.reason}` });
+  });
 
-chrome.runtime.onStartup.addListener(async () => {
-  await logger.info('lifecycle', 'Browser startup catch-up check');
-  await syncAlarmSchedule();
-  await runCheckCycle({ trigger: 'startup' });
-});
+  chrome.runtime.onStartup.addListener(async () => {
+    await logger.info('lifecycle', 'Browser startup catch-up check');
+    await syncAlarmSchedule();
+    await runCheckCycle({ trigger: 'startup' });
+  });
 
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== CHECK_ALARM_NAME) return;
-  await syncAlarmSchedule();
-  await runCheckCycle({ trigger: 'alarm' });
-});
+  chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name !== CHECK_ALARM_NAME) return;
+    await syncAlarmSchedule();
+    await runCheckCycle({ trigger: 'alarm' });
+  });
 
-chrome.notifications.onClicked.addListener(async (notificationId) => {
-  if (!notificationId.startsWith('claimit:')) return;
-  await openOrFocusNotificationTarget(notificationId);
-});
-
-chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIndex) => {
-  if (!notificationId.startsWith('claimit:')) return;
-  if (buttonIndex === 0) {
+  chrome.notifications.onClicked.addListener(async (notificationId) => {
+    if (!notificationId.startsWith('claimit:')) return;
     await openOrFocusNotificationTarget(notificationId);
-  } else {
-    await removeNotificationTarget(notificationId);
-    await chrome.notifications.clear(notificationId);
-  }
-});
+  });
 
-chrome.notifications.onClosed.addListener(async (notificationId) => {
-  if (!notificationId.startsWith('claimit:')) return;
-  await removeNotificationTarget(notificationId);
-});
-
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  const handle = async () => {
-    switch (message?.type) {
-      case 'CLAIMIT_RUN_CHECK':
-        return runCheckCycle({ trigger: 'manual' });
-
-      case 'CLAIMIT_CLAIM_ONE':
-        return claimSingleOffer(message.store, message.id);
-
-      case 'CLAIMIT_SET_PAUSED': {
-        const paused = Boolean(message.paused);
-        const updated = await saveSettings({ paused });
-        if (paused) {
-          abortActiveAutomation();
-        }
-        await logger.info('engine', paused ? 'Automation paused' : 'Automation resumed');
-        return { paused: updated.paused };
-      }
-
-      case 'CLAIMIT_RESCHEDULE':
-        return { periodInMinutes: await syncAlarmSchedule() };
-
-      case 'CLAIMIT_CLEAR_HISTORY':
-        await clearHistory();
-        await logger.info('storage', 'Claim history cleared');
-        return { ok: true };
-
-      case 'CLAIMIT_REFRESH_REMOTE_CONFIG':
-        return getSelectorsConfig({ forceRefresh: true });
-
-      case 'CLAIMIT_TEST_WEBHOOK':
-        await sendTestWebhook(message.channel, message.config);
-        return { ok: true };
-
-      default:
-        return { error: `Unknown message type: ${message?.type}` };
+  chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIndex) => {
+    if (!notificationId.startsWith('claimit:')) return;
+    if (buttonIndex === 0) {
+      await openOrFocusNotificationTarget(notificationId);
+    } else {
+      await removeNotificationTarget(notificationId);
+      await chrome.notifications.clear(notificationId);
     }
-  };
+  });
 
-  handle()
-    .then((res) => sendResponse({ ok: true, data: res }))
-    .catch((err) =>
-      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) })
-    );
-  return true; // Keep message channel open for async response
-});
+  chrome.notifications.onClosed.addListener(async (notificationId) => {
+    if (!notificationId.startsWith('claimit:')) return;
+    await removeNotificationTarget(notificationId);
+  });
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    const handle = async () => {
+      switch (message?.type) {
+        case 'CLAIMIT_RUN_CHECK':
+          return runCheckCycle({ trigger: 'manual' });
+
+        case 'CLAIMIT_CLAIM_ONE':
+          return claimSingleOffer(message.store, message.id);
+
+        case 'CLAIMIT_SET_PAUSED': {
+          const paused = Boolean(message.paused);
+          const updated = await saveSettings({ paused });
+          if (paused) {
+            abortActiveAutomation();
+          }
+          await logger.info('engine', paused ? 'Automation paused' : 'Automation resumed');
+          return { paused: updated.paused };
+        }
+
+        case 'CLAIMIT_RESCHEDULE':
+          return { periodInMinutes: await syncAlarmSchedule() };
+
+        case 'CLAIMIT_CLEAR_HISTORY':
+          await clearHistory();
+          await logger.info('storage', 'Claim history cleared');
+          return { ok: true };
+
+        case 'CLAIMIT_REFRESH_REMOTE_CONFIG':
+          return getSelectorsConfig({ forceRefresh: true });
+
+        case 'CLAIMIT_TEST_WEBHOOK':
+          await sendTestWebhook(message.channel, message.config);
+          return { ok: true };
+
+        default:
+          return { error: `Unknown message type: ${message?.type}` };
+      }
+    };
+
+    handle()
+      .then((res) => sendResponse({ ok: true, data: res }))
+      .catch((err) =>
+        sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) })
+      );
+    return true; // Keep message channel open for async response
+  });
+}
