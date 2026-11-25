@@ -1,6 +1,16 @@
 import { getSettings, saveSettings } from '../storage.js';
 import { getAllProviders } from '../providers/index.js';
 import { logger } from '../logger.js';
+import { createSvgUse, createIllustration } from '../ui/ui-helpers.js';
+
+const STORE_HELPERS = {
+  epic: 'Checks weekly free promotions and claims via Epic store checkout.',
+  steam: 'Monitors 100%-off specials and claims free-to-keep Steam licenses.',
+  gog: 'Planned provider for GOG giveaway banners (not yet enabled).',
+  prime: 'Planned provider for Prime Gaming PC drops (not yet enabled).',
+  fab: 'Planned provider for Fab limited-time assets (not yet enabled).',
+  itch: 'Planned provider for itch.io 100%-off sales (not yet enabled).'
+};
 
 const els = {
   saveStatus: document.getElementById('saveStatus'),
@@ -28,14 +38,17 @@ const els = {
 };
 
 let statusTimer = null;
+let clearConfirmTimer = null;
+let clearArmed = false;
 
 function flashStatus(text, isError = false) {
   clearTimeout(statusTimer);
   els.saveStatus.textContent = text;
-  els.saveStatus.style.color = isError ? '#f87171' : '#10b981';
+  els.saveStatus.classList.toggle('error', isError);
   statusTimer = setTimeout(() => {
     els.saveStatus.textContent = '';
-  }, 2600);
+    els.saveStatus.classList.remove('error');
+  }, 3000);
 }
 
 async function ensureHostPermission(origins) {
@@ -47,6 +60,20 @@ async function ensureHostPermission(origins) {
   }
 }
 
+async function sendBgMessage(payload) {
+  try {
+    const res = await chrome.runtime.sendMessage(payload);
+    if (res && res.ok === false) {
+      flashStatus(res.error || 'Request failed', true);
+      return null;
+    }
+    return res;
+  } catch (err) {
+    flashStatus(err instanceof Error ? err.message : String(err), true);
+    return null;
+  }
+}
+
 function renderStores(settings) {
   els.storesList.replaceChildren();
   const providers = getAllProviders();
@@ -55,41 +82,29 @@ function renderStores(settings) {
     const isStub = provider.stub === true;
     const storeCfg = settings.stores?.[provider.id] || { enabled: false, mode: 'notify' };
 
-    const card = document.createElement('div');
-    card.className = `store-card${isStub ? ' stub' : ''}`;
+    const row = document.createElement('div');
+    row.className = `store-row${isStub ? ' stub' : ''}`;
 
-    const top = document.createElement('div');
-    top.className = 'store-top';
+    const idWrap = document.createElement('div');
+    idWrap.className = 'store-id';
+    idWrap.appendChild(createSvgUse(`store-${provider.id}`, 'store-tile', 'stores.svg'));
 
-    const title = document.createElement('span');
-    title.textContent = isStub ? `${provider.name} (Soon)` : provider.name;
-
-    const toggle = document.createElement('input');
-    toggle.type = 'checkbox';
-    toggle.checked = !isStub && Boolean(storeCfg.enabled);
-    toggle.disabled = isStub;
-    toggle.addEventListener('change', async () => {
-      const current = await getSettings();
-      await saveSettings({
-        stores: {
-          [provider.id]: {
-            ...current.stores[provider.id],
-            enabled: toggle.checked
-          }
-        }
-      });
-      flashStatus('Saved');
-    });
-
-    top.append(title, toggle);
-    card.appendChild(top);
+    const textCol = document.createElement('div');
+    const nameEl = document.createElement('div');
+    nameEl.className = 'store-name';
+    nameEl.textContent = isStub ? `${provider.name} (Planned)` : provider.name;
+    const helper = document.createElement('p');
+    helper.className = 'helper';
+    helper.textContent = STORE_HELPERS[provider.id] || 'Store automation provider.';
+    textCol.append(nameEl, helper);
+    idWrap.appendChild(textCol);
 
     const modeSelect = document.createElement('select');
+    modeSelect.className = 'select';
     modeSelect.disabled = isStub;
-    const optAuto = new Option('Auto-claim', 'auto');
-    const optNotify = new Option('Notify only', 'notify');
-    modeSelect.add(optAuto);
-    modeSelect.add(optNotify);
+    modeSelect.setAttribute('aria-label', `${provider.name} claim mode`);
+    modeSelect.add(new Option('Auto-claim', 'auto'));
+    modeSelect.add(new Option('Notify only', 'notify'));
     modeSelect.value = storeCfg.mode || 'auto';
     modeSelect.addEventListener('change', async () => {
       const current = await getSettings();
@@ -104,31 +119,85 @@ function renderStores(settings) {
       flashStatus('Saved');
     });
 
-    card.appendChild(modeSelect);
-    els.storesList.appendChild(card);
+    const switchLabel = document.createElement('label');
+    switchLabel.className = 'switch';
+    const toggle = document.createElement('input');
+    toggle.type = 'checkbox';
+    toggle.checked = !isStub && Boolean(storeCfg.enabled);
+    toggle.disabled = isStub;
+    toggle.setAttribute('aria-label', `Enable ${provider.name}`);
+    toggle.addEventListener('change', async () => {
+      const current = await getSettings();
+      await saveSettings({
+        stores: {
+          [provider.id]: {
+            ...current.stores[provider.id],
+            enabled: toggle.checked
+          }
+        }
+      });
+      flashStatus('Saved');
+    });
+    const track = document.createElement('span');
+    track.className = 'switch-track';
+    track.setAttribute('aria-hidden', 'true');
+    switchLabel.append(toggle, track);
+
+    row.append(idWrap, modeSelect, switchLabel);
+    els.storesList.appendChild(row);
   }
 }
 
 async function renderLogs() {
   const level = els.logLevelFilter.value;
   const all = await logger.getAll();
-  const filtered = level === 'all' ? all : all.filter((e) => e.level === level);
+  const recent = all.slice(-50);
+  const filtered = level === 'all' ? recent : recent.filter((e) => e.level === level);
   const newestFirst = filtered.slice().reverse();
 
   els.logsContainer.replaceChildren();
   if (newestFirst.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'log-entry log-level-debug';
-    empty.textContent = 'No log entries.';
-    els.logsContainer.appendChild(empty);
+    const emptyWrap = document.createElement('div');
+    emptyWrap.className = 'state-box';
+    const illus = await createIllustration('illus-empty-free');
+    if (illus) emptyWrap.appendChild(illus);
+    const title = document.createElement('p');
+    title.className = 'state-title';
+    title.textContent = 'No activity logged yet';
+    const desc = document.createElement('p');
+    desc.className = 'state-desc';
+    desc.textContent = 'Events appear here after your first store check or claim attempt.';
+    emptyWrap.append(title, desc);
+    els.logsContainer.appendChild(emptyWrap);
     return;
   }
 
+  const timeFmt = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
   for (const entry of newestFirst) {
     const row = document.createElement('div');
-    row.className = `log-entry log-level-${entry.level}`;
-    const metaText = entry.meta ? ` ${JSON.stringify(entry.meta)}` : '';
-    row.textContent = `[${entry.ts}] [${entry.level.toUpperCase()}] [${entry.scope}] ${entry.message}${metaText}`;
+    row.className = 'log-row';
+
+    const ts = document.createElement('span');
+    ts.className = 'log-ts tabular';
+    const d = new Date(entry.ts);
+    ts.textContent = Number.isNaN(d.getTime()) ? entry.ts : timeFmt.format(d);
+    ts.title = entry.ts;
+
+    const lvl = document.createElement('span');
+    lvl.className = `log-lvl-${entry.level}`;
+    lvl.textContent = entry.level.toUpperCase();
+
+    const msg = document.createElement('span');
+    msg.className = 'log-msg';
+    const metaText = entry.meta ? ` · ${JSON.stringify(entry.meta)}` : '';
+    msg.textContent = `[${entry.scope}] ${entry.message}${metaText}`;
+
+    row.append(ts, lvl, msg);
     els.logsContainer.appendChild(row);
   }
 }
@@ -169,20 +238,6 @@ async function saveNotificationFields() {
     }
   });
   flashStatus('Saved');
-}
-
-async function sendBgMessage(payload) {
-  try {
-    const res = await chrome.runtime.sendMessage(payload);
-    if (res && res.ok === false) {
-      flashStatus(res.error || 'Request failed', true);
-      return null;
-    }
-    return res;
-  } catch (err) {
-    flashStatus(err instanceof Error ? err.message : String(err), true);
-    return null;
-  }
 }
 
 els.checkIntervalHours.addEventListener('change', async () => {
@@ -284,6 +339,19 @@ els.refreshConfigBtn.addEventListener('click', async () => {
 });
 
 els.clearHistoryBtn.addEventListener('click', async () => {
+  if (!clearArmed) {
+    clearArmed = true;
+    els.clearHistoryBtn.textContent = 'Click again to confirm';
+    clearTimeout(clearConfirmTimer);
+    clearConfirmTimer = setTimeout(() => {
+      clearArmed = false;
+      els.clearHistoryBtn.textContent = 'Clear history';
+    }, 4000);
+    return;
+  }
+  clearTimeout(clearConfirmTimer);
+  clearArmed = false;
+  els.clearHistoryBtn.textContent = 'Clear history';
   if (await sendBgMessage({ type: 'CLAIMIT_CLEAR_HISTORY' })) {
     flashStatus('History cleared');
   }
