@@ -11,6 +11,13 @@ import { logger } from './logger.js';
 
 const TARGETS_STORAGE_KEY = 'claimit_notification_targets';
 const MAX_IMAGE_BYTES = 1_500_000;
+let notificationSeq = 0;
+
+function redactSecrets(text) {
+  return String(text || '')
+    .replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]')
+    .replace(/\/webhooks\/[^/\s]+\/[^/\s]+/g, '/webhooks/[REDACTED]');
+}
 
 /**
  * Pure helper to determine whether a notification should be emitted for an offer in a cycle.
@@ -32,7 +39,7 @@ export function shouldNotify(previousEntry, cycleId, status) {
  * @param {ArrayBuffer} buffer
  * @returns {string}
  */
-export function arrayBufferToBase64(buffer) {
+function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   const chunkSize = 0x8000;
   const parts = [];
@@ -333,7 +340,8 @@ export async function notifyOfferOutcome({
 
   // Chrome Notifications
   if (settings?.notifications?.chrome !== false && typeof chrome !== 'undefined' && chrome.notifications) {
-    const notificationId = `claimit:${key}:${Date.now()}`;
+    notificationSeq += 1;
+    const notificationId = `claimit:${key}:${Date.now()}-${notificationSeq}`;
     await saveNotificationTarget(notificationId, {
       offerUrl: offer.url,
       store: offer.store,
@@ -404,7 +412,7 @@ export async function notifyOfferOutcome({
     } catch (err) {
       await logger.warn('notifications', 'Telegram alert failed', {
         key,
-        error: err instanceof Error ? err.message : String(err)
+        error: redactSecrets(err instanceof Error ? err.message : String(err))
       });
     }
 
@@ -413,7 +421,7 @@ export async function notifyOfferOutcome({
     } catch (err) {
       await logger.warn('notifications', 'Discord alert failed', {
         key,
-        error: err instanceof Error ? err.message : String(err)
+        error: redactSecrets(err instanceof Error ? err.message : String(err))
       });
     }
   }

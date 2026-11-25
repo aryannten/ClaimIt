@@ -1,4 +1,5 @@
 import {
+  STORAGE_KEYS,
   getSettings,
   getHistory,
   getCurrentOffers,
@@ -6,6 +7,13 @@ import {
   computeValueSaved
 } from '../storage.js';
 import { CLAIM_STATUS } from '../providers/constants.js';
+
+const RELEVANT_STORAGE_KEYS = new Set([
+  STORAGE_KEYS.SETTINGS,
+  STORAGE_KEYS.HISTORY,
+  STORAGE_KEYS.CURRENT_OFFERS,
+  STORAGE_KEYS.META
+]);
 
 const els = {
   lastCheckedText: document.getElementById('lastCheckedText'),
@@ -22,6 +30,31 @@ const els = {
   tabClaimed: document.getElementById('tab-claimed'),
   tabIssues: document.getElementById('tab-issues')
 };
+
+let renderInFlight = false;
+let renderQueued = false;
+
+function isSafeHttpsUrl(url) {
+  return typeof url === 'string' && url.startsWith('https://');
+}
+
+async function openStoreTab(url) {
+  if (!isSafeHttpsUrl(url)) return;
+  await chrome.tabs.create({ url, active: true });
+}
+
+async function sendRuntimeMessage(payload) {
+  try {
+    const res = await chrome.runtime.sendMessage(payload);
+    if (res && res.ok === false) {
+      throw new Error(res.error || 'Background request failed');
+    }
+    return res;
+  } catch (err) {
+    els.lastCheckedText.textContent = err instanceof Error ? err.message : String(err);
+    return null;
+  }
+}
 
 function formatRelativeTime(iso) {
   if (!iso) return 'Never';
@@ -41,11 +74,14 @@ function formatDateShort(iso) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-function statusChip(status, dryRun) {
+function statusChip(status, dryRun, alreadyOwned) {
   const span = document.createElement('span');
   if (dryRun && status === CLAIM_STATUS.CLAIMED) {
     span.className = 'chip chip-warn';
     span.textContent = 'Dry-run';
+  } else if (alreadyOwned && status === CLAIM_STATUS.CLAIMED) {
+    span.className = 'chip chip-muted';
+    span.textContent = 'Owned';
   } else if (status === CLAIM_STATUS.CLAIMED) {
     span.className = 'chip chip-claimed';
     span.textContent = 'Claimed';
@@ -68,7 +104,7 @@ function createOfferCard(item, mode) {
 
   const img = document.createElement('img');
   img.className = 'card-thumb';
-  img.src = item.image || '../../assets/icon-128.png';
+  img.src = isSafeHttpsUrl(item.image) ? item.image : '../../assets/icon-128.png';
   img.alt = item.title || 'Game cover';
   img.addEventListener('error', () => {
     img.src = '../../assets/icon-128.png';
@@ -85,7 +121,7 @@ function createOfferCard(item, mode) {
   title.textContent = item.title;
   title.title = item.title;
   titleRow.appendChild(title);
-  titleRow.appendChild(statusChip(item.status, item.dryRun));
+  titleRow.appendChild(statusChip(item.status, item.dryRun, item.alreadyOwned));
   body.appendChild(titleRow);
 
   const meta = document.createElement('div');
@@ -137,17 +173,20 @@ function createOfferCard(item, mode) {
       claimBtn.textContent = item.status === CLAIM_STATUS.NEEDS_USER ? 'Open & Claim' : 'Claim';
       claimBtn.addEventListener('click', async () => {
         if (item.status === CLAIM_STATUS.NEEDS_USER) {
-          await chrome.tabs.create({ url: item.url, active: true });
+          await openStoreTab(item.url);
           return;
         }
         claimBtn.disabled = true;
         claimBtn.textContent = 'Claiming...';
-        await chrome.runtime.sendMessage({
-          type: 'CLAIMIT_CLAIM_ONE',
-          store: item.store,
-          id: item.id
-        });
-        await render();
+        try {
+          await sendRuntimeMessage({
+            type: 'CLAIMIT_CLAIM_ONE',
+            store: item.store,
+            id: item.id
+          });
+        } finally {
+          await scheduleRender();
+        }
       });
       actions.appendChild(claimBtn);
     }
@@ -159,24 +198,29 @@ function createOfferCard(item, mode) {
       retryBtn.addEventListener('click', async () => {
         retryBtn.disabled = true;
         retryBtn.textContent = 'Retrying...';
-        await chrome.runtime.sendMessage({
-          type: 'CLAIMIT_CLAIM_ONE',
-          store: item.store,
-          id: item.id
-        });
-        await render();
+        try {
+          await sendRuntimeMessage({
+            type: 'CLAIMIT_CLAIM_ONE',
+            store: item.store,
+            id: item.id
+          });
+        } finally {
+          await scheduleRender();
+        }
       });
       actions.appendChild(retryBtn);
     }
   }
 
-  const openLinkBtn = document.createElement('button');
-  openLinkBtn.className = 'btn btn-sm';
-  openLinkBtn.textContent = 'Store';
-  openLinkBtn.addEventListener('click', () => {
-    chrome.tabs.create({ url: item.url, active: true });
-  });
-  actions.appendChild(openLinkBtn);
+  if (isSafeHttpsUrl(item.url)) {
+    const openLinkBtn = document.createElement('button');
+    openLinkBtn.className = 'btn btn-sm';
+    openLinkBtn.textContent = 'Store';
+    openLinkBtn.addEventListener('click', () => {
+      openStoreTab(item.url);
+    });
+    actions.appendChild(openLinkBtn);
+  }
 
   body.appendChild(actions);
   card.appendChild(body);
@@ -220,10 +264,10 @@ async function render() {
     }
   }
 
-  // Tab 2: Claimed
+  // Tab 2: Claimed (excludes dry-run and pre-existing owned items)
   const allHistory = Object.values(historyMap);
   const claimed = allHistory
-    .filter((h) => h.status === CLAIM_STATUS.CLAIMED && !h.dryRun)
+    .filter((h) => h.status === CLAIM_STATUS.CLAIMED && !h.dryRun && !h.alreadyOwned)
     .sort((a, b) => Date.parse(b.claimedAt || b.updatedAt || 0) - Date.parse(a.claimedAt || a.updatedAt || 0));
 
   const saved = computeValueSaved(historyMap);
@@ -238,7 +282,12 @@ async function render() {
   sumLbl.textContent = 'Total Value Saved';
   const sumVal = document.createElement('div');
   sumVal.className = 'summary-value';
-  sumVal.textContent = `${saved.currency} ${saved.totalMajor.toFixed(2)}`;
+  const extraCurrencies = Object.entries(saved.totalsByCurrency || {})
+    .filter(([cur]) => cur !== saved.currency)
+    .map(([cur, amt]) => `${cur} ${amt.toFixed(2)}`);
+  sumVal.textContent = extraCurrencies.length
+    ? `${saved.currency} ${saved.totalMajor.toFixed(2)} + ${extraCurrencies.join(', ')}`
+    : `${saved.currency} ${saved.totalMajor.toFixed(2)}`;
   summaryLeft.append(sumLbl, sumVal);
 
   const summaryRight = document.createElement('div');
@@ -271,6 +320,23 @@ async function render() {
   }
 }
 
+async function scheduleRender() {
+  if (renderInFlight) {
+    renderQueued = true;
+    return;
+  }
+  renderInFlight = true;
+  try {
+    await render();
+  } finally {
+    renderInFlight = false;
+    if (renderQueued) {
+      renderQueued = false;
+      await scheduleRender();
+    }
+  }
+}
+
 document.querySelectorAll('.tab').forEach((btn) => {
   btn.addEventListener('click', () => {
     const target = btn.dataset.tab;
@@ -285,26 +351,32 @@ document.querySelectorAll('.tab').forEach((btn) => {
 });
 
 els.pauseSwitch.addEventListener('change', async () => {
-  await chrome.runtime.sendMessage({
+  await sendRuntimeMessage({
     type: 'CLAIMIT_SET_PAUSED',
     paused: els.pauseSwitch.checked
   });
-  await render();
+  await scheduleRender();
 });
 
 els.checkNowBtn.addEventListener('click', async () => {
   els.checkNowBtn.disabled = true;
   els.checkNowBtn.textContent = 'Checking...';
-  await chrome.runtime.sendMessage({ type: 'CLAIMIT_RUN_CHECK' });
-  await render();
+  try {
+    await sendRuntimeMessage({ type: 'CLAIMIT_RUN_CHECK' });
+  } finally {
+    await scheduleRender();
+  }
 });
 
 els.openOptionsBtn.addEventListener('click', () => {
   chrome.runtime.openOptionsPage();
 });
 
-chrome.storage.onChanged.addListener(() => {
-  render();
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local') return;
+  if (Object.keys(changes).some((k) => RELEVANT_STORAGE_KEYS.has(k))) {
+    scheduleRender();
+  }
 });
 
-render();
+scheduleRender();

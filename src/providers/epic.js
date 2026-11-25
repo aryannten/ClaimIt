@@ -105,7 +105,7 @@ function pickCoverImage(keyImages) {
  * @param {object} endpoints
  * @returns {string}
  */
-export function resolveEpicStoreUrl(element, endpoints = {}) {
+function resolveEpicStoreUrl(element, endpoints = {}) {
   const storeBase = endpoints.storeBase || 'https://store.epicgames.com/en-US/p/';
   const bundleBase = endpoints.bundleBase || 'https://store.epicgames.com/en-US/bundles/';
 
@@ -273,16 +273,18 @@ export async function isOwned(offer, context = {}) {
   return Boolean(entry && entry.status === 'CLAIMED' && !entry.dryRun);
 }
 
+function isEpicLoginUrl(url) {
+  return /\/id\/login|\/login\b|accounts\.epicgames\.com/i.test(url || '');
+}
+
 /**
- * Find the checkout frame (either payment-website-pci or store.epicgames.com/purchase)
- * or fallback to top frame if inline checkout is rendered.
+ * Find the checkout frame (payment-website-pci or store.epicgames.com/purchase),
+ * or top frame ONLY when an inline checkout container (#webPurchaseContainer/#purchase-app) exists.
  */
-function pickCheckoutFrame(frames) {
-  return (
-    frames.find((f) => /payment-website-pci|\/purchase/i.test(f.href)) ||
-    frames.find((f) => f.isTop) ||
-    null
-  );
+function pickCheckoutFrame(frames, hasInlineCheckout) {
+  const iframe = frames.find((f) => !f.isTop && /payment-website-pci|\/purchase/i.test(f.href));
+  if (iframe) return iframe;
+  return hasInlineCheckout ? (frames.find((f) => f.isTop) || null) : null;
 }
 
 /**
@@ -310,10 +312,16 @@ export async function claim(offer, context = {}) {
   try {
     tab = await openBackgroundTab(offer.url, signal);
 
-    // Give Epic's SPA hydration a moment to render the CTA button
+    // Wait for Epic's SPA hydration using MutationObserver-backed inspection
     let topState = null;
-    for (let attempt = 0; attempt < 15; attempt++) {
+    for (let attempt = 0; attempt < 10; attempt++) {
       if (signal?.aborted) throw new Error('timeout');
+
+      const tabInfo = await chrome.tabs.get(tab.id);
+      if (isEpicLoginUrl(tabInfo.url)) {
+        return await handoffToUser('Login required on Epic Games Store');
+      }
+
       const frames = await listTabFrames(tab.id);
       const topFrame = frames.find((f) => f.isTop);
       if (topFrame) {
@@ -321,12 +329,13 @@ export async function claim(offer, context = {}) {
           tab.id,
           topFrame.frameId,
           EPIC_CONTENT_SCRIPT,
-          { action: 'EPIC_INSPECT_PRODUCT', config: epicCfg },
+          { action: 'EPIC_INSPECT_PRODUCT', config: epicCfg, waitMs: 1500 },
           signal
         );
         if (topState?.readyForDecision) break;
+      } else {
+        await delay(800, signal);
       }
-      await delay(1000, signal);
     }
 
     if (!topState) {
@@ -359,6 +368,10 @@ export async function claim(offer, context = {}) {
     const framesBeforeClick = await listTabFrames(tab.id);
     const topFrame = framesBeforeClick.find((f) => f.isTop);
     if (!topFrame) {
+      const tabInfo = await chrome.tabs.get(tab.id);
+      if (isEpicLoginUrl(tabInfo.url)) {
+        return await handoffToUser('Login required on Epic Games Store');
+      }
       return { status: CLAIM_STATUS.FAILED, reason: 'Top frame disappeared before Get click' };
     }
 
@@ -383,16 +396,16 @@ export async function claim(offer, context = {}) {
       await delay(1000, signal);
 
       const tabInfo = await chrome.tabs.get(tab.id);
-      if (/\/id\/login|\/login/i.test(tabInfo.url || '')) {
+      if (isEpicLoginUrl(tabInfo.url)) {
         return await handoffToUser('Login required on Epic Games Store');
       }
 
       const frames = await listTabFrames(tab.id);
       const top = frames.find((f) => f.isTop);
-      const checkout = pickCheckoutFrame(frames);
+      let topCheck = null;
 
       if (top) {
-        const topCheck = await sendFrameMessage(
+        topCheck = await sendFrameMessage(
           tab.id,
           top.frameId,
           EPIC_CONTENT_SCRIPT,
@@ -413,6 +426,7 @@ export async function claim(offer, context = {}) {
         }
       }
 
+      const checkout = pickCheckoutFrame(frames, Boolean(topCheck?.hasCheckoutContainer));
       if (!checkout) continue;
 
       const checkoutState = await sendFrameMessage(

@@ -44,35 +44,67 @@
     return null;
   }
 
+  function waitForState(inspectFn, isDone, waitMs = 0) {
+    const initial = inspectFn();
+    if (!waitMs || isDone(initial) || !document.body) {
+      return Promise.resolve(initial);
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let observer = null;
+      const timer = setTimeout(() => finish(inspectFn()), waitMs);
+
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (observer) observer.disconnect();
+        resolve(result);
+      };
+
+      observer = new MutationObserver(() => {
+        const next = inspectFn();
+        if (isDone(next)) {
+          finish(next);
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    });
+  }
+
   function inspectPage(config = {}) {
     const selectors = config.selectors || {};
     const texts = config.texts || {};
-    const bodyText = (document.body?.innerText || '').toLowerCase();
+
+    const purchaseBlock = findFirstVisible(selectors.purchaseContainer || []);
+    const purchaseText = purchaseBlock ? normText(purchaseBlock) : '';
+    const regionErrorEl = findFirstVisible(selectors.regionError || [], texts.unavailable || []);
 
     const ageGateEl = findFirstVisible(selectors.ageGateForm || []);
-    const ageGate = Boolean(ageGateEl) || /\/agecheck\//i.test(window.location.pathname);
+    const ageGate =
+      Boolean(ageGateEl) ||
+      /\/agecheck\//i.test(window.location.pathname) ||
+      matchesAnyText(purchaseText, texts.ageGate || []);
 
     const ownedEl = findFirstVisible(selectors.ownedIndicator || []);
-    const owned = Boolean(ownedEl) || matchesAnyText(bodyText, texts.alreadyOwned || []);
+    const owned = Boolean(ownedEl) || matchesAnyText(purchaseText, texts.alreadyOwned || []);
 
+    const bodyText = (document.body?.innerText || '').toLowerCase();
     const claimedSuccess =
       matchesAnyText(bodyText, texts.claimedSuccess || []) ||
       /\/account\/licenses/i.test(window.location.pathname);
 
-    const unavailable = matchesAnyText(bodyText, texts.unavailable || []);
+    const unavailable = Boolean(regionErrorEl);
 
-    const addBtn =
-      findFirstVisible(selectors.addToAccountButton || [], texts.addToAccount || []) ||
-      findFirstVisible(["a[href*='addFreeLicense']"]);
-
-    const purchaseBlock = document.querySelector('.game_area_purchase_game_wrapper, #game_area_purchase');
-    const purchaseText = purchaseBlock ? normText(purchaseBlock) : '';
+    const addBtn = findFirstVisible(selectors.addToAccountButton || [], texts.addToAccount || []);
     const freeWeekendOrTrial =
       !addBtn && matchesAnyText(purchaseText, texts.freeWeekendOrTrial || []);
 
-    const accountPulldown = document.querySelector('#account_pulldown');
-    const loginLink = findFirstVisible(["a.global_action_link[href*='login']"]);
-    const loginRequired = !accountPulldown && (Boolean(loginLink) || /\/login/i.test(window.location.pathname));
+    const accountPulldown = findFirstVisible(selectors.accountIndicator || []);
+    const loginLink = findFirstVisible(selectors.loginIndicator || []);
+    const loginRequired =
+      !accountPulldown && (Boolean(loginLink) || /\/login/i.test(window.location.pathname));
 
     const ready =
       ageGate ||
@@ -98,8 +130,8 @@
 
   function passAgeGate(config = {}) {
     const selectors = config.selectors || {};
-    const yearSelect = document.querySelector('#ageYear');
-    if (yearSelect && isVisible(yearSelect)) {
+    const yearSelect = findFirstVisible(selectors.ageGateYear || ['#ageYear']);
+    if (yearSelect) {
       yearSelect.value = '1990';
       yearSelect.dispatchEvent(new Event('change', { bubbles: true }));
     }
@@ -115,10 +147,7 @@
   function clickAddToAccount(config = {}) {
     const selectors = config.selectors || {};
     const texts = config.texts || {};
-
-    const btn =
-      findFirstVisible(selectors.addToAccountButton || [], texts.addToAccount || []) ||
-      findFirstVisible(["a[href*='addFreeLicense']"]);
+    const btn = findFirstVisible(selectors.addToAccountButton || [], texts.addToAccount || []);
 
     if (!btn) {
       return { clicked: false, reason: 'Add to Account button not found' };
@@ -131,6 +160,14 @@
     try {
       switch (message?.action) {
         case 'STEAM_INSPECT_PAGE':
+          if (message.waitMs) {
+            waitForState(
+              () => inspectPage(message.config),
+              (s) => s.ageGate || s.owned || s.claimedSuccess || s.unavailable || s.hasAddButton,
+              message.waitMs
+            ).then(sendResponse);
+            return true;
+          }
           sendResponse(inspectPage(message.config));
           return false;
         case 'STEAM_PASS_AGE_GATE':

@@ -16,6 +16,8 @@ import {
   getCurrentOffers,
   updateMeta,
   getMeta,
+  acquireCycleLock,
+  releaseCycleLock,
   makeOfferKey
 } from './storage.js';
 import { notifyOfferOutcome } from './notifications.js';
@@ -24,15 +26,32 @@ import { logger } from './logger.js';
 export const CLAIM_TIMEOUT_MS = 60_000;
 
 let activeCyclePromise = null;
+let activeCycleAbortController = null;
 let activeClaimAbortController = null;
+let claimQueue = Promise.resolve();
 
 /**
- * Abort any in-flight claim immediately when the user flips the Pause switch.
+ * Abort any in-flight cycle delay or claim immediately when the user flips Pause.
  */
 export function abortActiveAutomation() {
+  if (activeCycleAbortController) {
+    activeCycleAbortController.abort(new Error('paused'));
+  }
   if (activeClaimAbortController) {
     activeClaimAbortController.abort(new Error('paused'));
   }
+}
+
+/**
+ * Serialize claim attempts so at most one store claim runs at any instant.
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+function runSerializedClaim(fn) {
+  const next = claimQueue.then(fn, fn);
+  claimQueue = next.catch(() => {});
+  return next;
 }
 
 /**
@@ -44,39 +63,41 @@ export function abortActiveAutomation() {
  * @param {number} [timeoutMs=CLAIM_TIMEOUT_MS]
  */
 export async function executeClaimWithTimeout(provider, offer, context, timeoutMs = CLAIM_TIMEOUT_MS) {
-  const controller = new AbortController();
-  activeClaimAbortController = controller;
+  return runSerializedClaim(async () => {
+    const controller = new AbortController();
+    activeClaimAbortController = controller;
 
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new Error('timeout'));
-  }, timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error('timeout'));
+    }, timeoutMs);
 
-  try {
-    const result = await provider.claim(offer, {
-      ...context,
-      signal: controller.signal
-    });
-    if (!result || !result.status) {
-      return { status: CLAIM_STATUS.FAILED, reason: 'Invalid provider claim result' };
+    try {
+      const result = await provider.claim(offer, {
+        ...context,
+        signal: controller.signal
+      });
+      if (!result || !result.status) {
+        return { status: CLAIM_STATUS.FAILED, reason: 'Invalid provider claim result' };
+      }
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (timedOut || message === 'timeout') {
+        return { status: CLAIM_STATUS.FAILED, reason: 'timeout' };
+      }
+      if (message === 'paused') {
+        return { status: CLAIM_STATUS.FAILED, reason: 'Paused by user' };
+      }
+      return { status: CLAIM_STATUS.FAILED, reason: message };
+    } finally {
+      clearTimeout(timer);
+      if (activeClaimAbortController === controller) {
+        activeClaimAbortController = null;
+      }
     }
-    return result;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (timedOut || message === 'timeout') {
-      return { status: CLAIM_STATUS.FAILED, reason: 'timeout' };
-    }
-    if (message === 'paused') {
-      return { status: CLAIM_STATUS.FAILED, reason: 'Paused by user' };
-    }
-    return { status: CLAIM_STATUS.FAILED, reason: message };
-  } finally {
-    clearTimeout(timer);
-    if (activeClaimAbortController === controller) {
-      activeClaimAbortController = null;
-    }
-  }
+  });
 }
 
 /**
@@ -132,8 +153,11 @@ async function runCheckCycleInternal(options = {}) {
   const saveCurrentOffersFn = deps.setCurrentOffers || setCurrentOffers;
   const loadCurrentOffersFn = deps.getCurrentOffers || getCurrentOffers;
   const updateMetaFn = deps.updateMeta || updateMeta;
+  const acquireLockFn = deps.acquireCycleLock || acquireCycleLock;
+  const releaseLockFn = deps.releaseCycleLock || releaseCycleLock;
   const timeoutMs = deps.claimTimeoutMs || CLAIM_TIMEOUT_MS;
-  const interClaimDelayFn = deps.interClaimDelay || (() => humanDelay(1500, 3000));
+  const interClaimDelayFn =
+    deps.interClaimDelay || ((sig) => humanDelay(1500, 3000, sig));
 
   const settings = await loadSettings();
   if (settings.paused) {
@@ -141,7 +165,15 @@ async function runCheckCycleInternal(options = {}) {
     return { skipped: true, reason: 'paused', offers: await loadCurrentOffersFn() };
   }
 
-  const cycleId = `cycle-${Date.now()}`;
+  const cycleId = `cycle-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const acquired = await acquireLockFn(cycleId);
+  if (!acquired) {
+    await logger.info('engine', `Skipped ${trigger} cycle because another check is already running`);
+    return { skipped: true, reason: 'locked', offers: await loadCurrentOffersFn() };
+  }
+
+  const cycleController = new AbortController();
+  activeCycleAbortController = cycleController;
   await updateMetaFn({ isChecking: true, lastCycleId: cycleId });
   await logger.info('engine', `Starting check cycle (${trigger})`, {
     cycleId,
@@ -160,7 +192,7 @@ async function runCheckCycleInternal(options = {}) {
 
     for (const provider of providers) {
       const currentSettings = await loadSettings();
-      if (currentSettings.paused) {
+      if (currentSettings.paused || cycleController.signal.aborted) {
         await logger.info('engine', 'Automation paused mid-cycle; stopping further stores');
         break;
       }
@@ -186,7 +218,7 @@ async function runCheckCycleInternal(options = {}) {
 
       for (const offer of eligible) {
         const latestSettings = await loadSettings();
-        if (latestSettings.paused) {
+        if (latestSettings.paused || cycleController.signal.aborted) {
           await logger.info('engine', 'Automation paused mid-cycle; aborting remaining offers');
           break;
         }
@@ -242,7 +274,12 @@ async function runCheckCycleInternal(options = {}) {
 
         // Rate-limit: one claim at a time with human-like delay between consecutive claims
         if (claimsAttempted > 0) {
-          await interClaimDelayFn();
+          try {
+            await interClaimDelayFn(cycleController.signal);
+          } catch {
+            await logger.info('engine', 'Inter-claim delay aborted by pause');
+            break;
+          }
         }
         claimsAttempted += 1;
 
@@ -305,6 +342,11 @@ async function runCheckCycleInternal(options = {}) {
     await logger.error('engine', 'Unexpected error during check cycle', { error: msg });
     await updateMetaFn({ isChecking: false });
     return { skipped: false, error: msg, offers: snapshotOffers };
+  } finally {
+    if (activeCycleAbortController === cycleController) {
+      activeCycleAbortController = null;
+    }
+    await releaseLockFn(cycleId);
   }
 }
 
@@ -344,7 +386,7 @@ export async function claimSingleOffer(storeId, offerId) {
   });
 
   if (!(result.status === CLAIM_STATUS.CLAIMED && snap.dryRun)) {
-    await upsertHistoryFnSafe(snap);
+    await upsertHistoryEntry(snap);
   }
 
   const updated = offers.map((o) => (o.key === snap.key ? snap : o));
@@ -362,8 +404,4 @@ export async function claimSingleOffer(storeId, offerId) {
   });
 
   return result;
-}
-
-async function upsertHistoryFnSafe(snap) {
-  return upsertHistoryEntry(snap);
 }

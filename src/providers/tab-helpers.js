@@ -23,7 +23,7 @@ export async function openBackgroundTab(url, signal) {
  * @param {number} [timeoutMs=25000]
  * @param {AbortSignal} [signal]
  */
-export async function waitForTabComplete(tabId, timeoutMs = 25000, signal) {
+async function waitForTabComplete(tabId, timeoutMs = 25000, signal) {
   const current = await chrome.tabs.get(tabId);
   if (current.status === 'complete') return;
 
@@ -141,12 +141,21 @@ export async function sendFrameMessage(tabId, frameId, contentScriptFile, messag
   try {
     return await chrome.tabs.sendMessage(tabId, message, { frameId });
   } catch {
-    // Inject content script lazily if the frame navigated or loaded before script attachment
-    await chrome.scripting.executeScript({
-      target: { tabId, frameIds: [frameId] },
-      files: [contentScriptFile]
-    });
-    await delay(150, signal);
-    return chrome.tabs.sendMessage(tabId, message, { frameId });
+    if (signal?.aborted) throw new Error('timeout');
+    try {
+      // Inject content script lazily if the frame navigated or loaded before script attachment
+      await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] },
+        files: [contentScriptFile]
+      });
+      await delay(150, signal);
+      return await chrome.tabs.sendMessage(tabId, message, { frameId });
+    } catch (err) {
+      if (signal?.aborted || (err instanceof Error && err.message === 'timeout')) {
+        throw new Error('timeout');
+      }
+      // Frame likely navigated cross-origin (e.g., to SSO login page) or closed
+      return null;
+    }
   }
 }

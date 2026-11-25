@@ -135,7 +135,22 @@ test('excludes upcoming offers and expired offers', () => {
   assert.equal(expired.reason, 'expired');
 });
 
-test('excludes partial discounts (<100% off)', () => {
+test('excludes 99% and other partial discounts (<100% off)', () => {
+  const ninetyNine = classifyOffer(
+    {
+      id: 'p99',
+      store: 'steam',
+      title: 'Almost Free Game',
+      originalPrice: 100,
+      discountPrice: 1,
+      discountPercent: 99,
+      isLimitedTime: true
+    },
+    NOW
+  );
+  assert.equal(ninetyNine.eligible, false);
+  assert.equal(ninetyNine.reason, 'not_100_percent_off');
+
   const { eligible, excluded } = classifyOffers(
     [
       {
@@ -153,4 +168,41 @@ test('excludes partial discounts (<100% off)', () => {
   );
   assert.equal(eligible.length, 0);
   assert.equal(excluded[0].reason, 'not_100_percent_off');
+});
+
+test('rejects missing fields and malformed inputs safely', () => {
+  assert.equal(classifyOffer(null, NOW).reason, 'invalid_offer');
+  assert.equal(classifyOffer(undefined, NOW).reason, 'invalid_offer');
+  assert.equal(classifyOffer('bad', NOW).reason, 'invalid_offer');
+  assert.equal(classifyOffer({}, NOW).reason, 'invalid_offer');
+  assert.equal(classifyOffer({ id: 'only-id' }, NOW).reason, 'invalid_offer');
+
+  const missingWindow = classifyOffer(
+    {
+      id: 'no-window',
+      title: 'Missing Dates',
+      originalPrice: 19.99,
+      discountPrice: 0,
+      discountPercent: 100,
+      startDate: 'not-a-date',
+      endDate: 'also-invalid'
+    },
+    NOW
+  );
+  assert.equal(missingWindow.eligible, false);
+  assert.equal(missingWindow.reason, 'not_limited_time');
+
+  const negPrice = classifyOffer(
+    {
+      id: 'neg-price',
+      title: 'Negative Price',
+      originalPrice: -5,
+      discountPrice: 0,
+      discountPercent: 100,
+      isLimitedTime: true
+    },
+    NOW
+  );
+  assert.equal(negPrice.eligible, false);
+  assert.equal(negPrice.reason, 'no_paid_original_price');
 });

@@ -7,25 +7,25 @@ import {
   setSteamSource,
   fetchOffers as fetchSteamOffers
 } from '../src/providers/steam.js';
-import { getAllProviders, getActiveProviders, getEnabledProviders } from '../src/providers/index.js';
+import { getAllProviders, getProvider, getEnabledProviders } from '../src/providers/index.js';
 import { classifyOffers } from '../src/classifier.js';
 
 const NOW = Date.parse('2026-11-26T12:00:00.000Z');
 
-test('parseEpicPromotions parses live Epic payload and classifier selects only active 100%-off items', () => {
+test('parseEpicPromotions handles null promotions, empty arrays, expired, upcoming, and dual promos', () => {
   const payload = {
     data: {
       Catalog: {
         searchStore: {
           elements: [
             {
-              id: '1f9a12b06b4f437790b6913ad136a08c',
+              id: 'active-and-upcoming',
               namespace: 'ns1',
               title: 'Mark of the Deep',
               offerType: 'BASE_GAME',
               productSlug: null,
               urlSlug: '2fd257a6cd80405a833f9004ff07993a',
-              categories: [{ path: 'freegames' }, { path: 'games/edition/base' }],
+              categories: [{ path: 'freegames' }],
               keyImages: [{ type: 'OfferImageWide', url: 'https://cdn1.epicgames.com/mark.jpg' }],
               catalogNs: { mappings: [{ pageSlug: 'mark-of-the-deep-f7dc08', pageType: 'productHome' }] },
               offerMappings: [{ pageSlug: 'mark-of-the-deep-f7dc08', pageType: 'productHome' }],
@@ -50,36 +50,85 @@ test('parseEpicPromotions parses live Epic payload and classifier selects only a
                     ]
                   }
                 ],
-                upcomingPromotionalOffers: []
+                upcomingPromotionalOffers: [
+                  {
+                    promotionalOffers: [
+                      {
+                        startDate: '2026-12-10T16:00:00.000Z',
+                        endDate: '2027-01-07T16:00:00.000Z',
+                        discountSetting: { discountType: 'PERCENTAGE', discountPercentage: 40 }
+                      }
+                    ]
+                  }
+                ]
               }
             },
             {
-              id: 'partial-id',
-              namespace: 'ns2',
-              title: 'TerraScape',
+              id: 'null-promos',
+              namespace: 'ns-null',
+              title: 'No Promos Item',
               offerType: 'BASE_GAME',
-              productSlug: null,
-              urlSlug: 'terrascape',
-              categories: [{ path: 'freegames' }],
+              productSlug: 'no-promos',
+              categories: [],
               keyImages: [],
-              catalogNs: { mappings: [{ pageSlug: 'terrascape-2b12b1', pageType: 'productHome' }] },
-              price: {
-                totalPrice: {
-                  originalPrice: 1699,
-                  discountPrice: 1189,
-                  currencyCode: 'USD',
-                  currencyInfo: { decimals: 2 },
-                  fmtPrice: { originalPrice: '$16.99', discountPrice: '$11.89' }
-                }
-              },
+              price: { totalPrice: { originalPrice: 1499, discountPrice: 1499, currencyInfo: { decimals: 2 } } },
+              promotions: null
+            },
+            {
+              id: 'empty-arrays',
+              namespace: 'ns-empty',
+              title: 'Empty Arrays Item',
+              offerType: 'BASE_GAME',
+              productSlug: 'empty-arrays',
+              categories: [],
+              keyImages: [],
+              price: { totalPrice: { originalPrice: 999, discountPrice: 999, currencyInfo: { decimals: 2 } } },
+              promotions: { promotionalOffers: [], upcomingPromotionalOffers: [] }
+            },
+            {
+              id: 'expired-id',
+              namespace: 'ns-exp',
+              title: 'Expired Promo',
+              offerType: 'BASE_GAME',
+              productSlug: 'expired-promo',
+              categories: [],
+              keyImages: [],
+              price: { totalPrice: { originalPrice: 1999, discountPrice: 1999, currencyInfo: { decimals: 2 } } },
               promotions: {
                 promotionalOffers: [
                   {
                     promotionalOffers: [
                       {
-                        startDate: '2026-11-21T16:00:00.000Z',
-                        endDate: '2026-12-21T16:00:00.000Z',
-                        discountSetting: { discountType: 'PERCENTAGE', discountPercentage: 70 }
+                        startDate: '2026-11-12T16:00:00.000Z',
+                        endDate: '2026-11-19T16:00:00.000Z',
+                        discountSetting: { discountType: 'PERCENTAGE', discountPercentage: 0 }
+                      }
+                    ]
+                  }
+                ],
+                upcomingPromotionalOffers: []
+              }
+            },
+            {
+              id: 'dlc-id',
+              namespace: 'ns-dlc',
+              title: 'Bonus Pack DLC',
+              offerType: 'ADD_ON',
+              productSlug: null,
+              urlSlug: 'uuid-slug',
+              categories: [{ path: 'addons' }],
+              keyImages: [],
+              catalogNs: { mappings: [{ pageSlug: 'parent-game', pageType: 'productHome' }] },
+              offerMappings: [{ pageSlug: 'parent-game-bonus-pack-dlc', pageType: 'offer' }],
+              price: { totalPrice: { originalPrice: 499, discountPrice: 0, currencyInfo: { decimals: 2 } } },
+              promotions: {
+                promotionalOffers: [
+                  {
+                    promotionalOffers: [
+                      {
+                        startDate: '2026-11-19T16:00:00.000Z',
+                        endDate: '2026-11-26T16:00:00.000Z',
+                        discountSetting: { discountType: 'PERCENTAGE', discountPercentage: 0 }
                       }
                     ]
                   }
@@ -127,17 +176,21 @@ test('parseEpicPromotions parses live Epic payload and classifier selects only a
     }
   };
 
+  assert.deepEqual(parseEpicPromotions({}, {}, NOW), []);
+
   const parsed = parseEpicPromotions(payload, {}, NOW);
-  assert.equal(parsed.length, 3);
+  assert.equal(parsed.length, 6);
   assert.equal(parsed[0].url, 'https://store.epicgames.com/en-US/p/mark-of-the-deep-f7dc08');
+  assert.equal(parsed[4].url, 'https://store.epicgames.com/en-US/p/parent-game-bonus-pack-dlc');
 
   const { eligible, excluded } = classifyOffers(parsed, NOW);
-  assert.equal(eligible.length, 1);
+  assert.equal(eligible.length, 2);
   assert.equal(eligible[0].title, 'Mark of the Deep');
-  assert.equal(excluded.length, 2);
+  assert.equal(eligible[1].label, 'DLC');
+  assert.equal(excluded.length, 4);
 });
 
-test('parseSteamSearchHtml parses 100%-off search rows and rejects partial/weekend offers', () => {
+test('parseSteamSearchHtml parses 100%-off rows and skips multi-app bundles & partial discounts', () => {
   const html = `
     <a href="https://store.steampowered.com/app/555111/Free_Keep_Game/?snr=1"
        data-ds-appid="555111" class="search_result_row ds_collapse_flag">
@@ -150,6 +203,10 @@ test('parseSteamSearchHtml parses 100%-off search rows and rejects partial/weeke
           <div class="discount_final_price">Free</div>
         </div>
       </div>
+    </a>
+    <a href="https://store.steampowered.com/bundle/777/Bundle/"
+       data-ds-appid="111,222" class="search_result_row ds_collapse_flag">
+      <div class="search_name"><span class="title">Multi Bundle</span></div>
     </a>
     <a href="https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/?snr=1"
        data-ds-appid="1174180" class="search_result_row ds_collapse_flag">
@@ -176,11 +233,13 @@ test('parseSteamSearchHtml parses 100%-off search rows and rejects partial/weeke
   assert.equal(eligible[0].id, '555111');
 });
 
-test('Steam source can be swapped cleanly', async () => {
+test('Steam source can be swapped cleanly and SteamDB parser avoids fake prices', async () => {
   const html = `<table><tr data-appid="999001"><td><a href="/app/999001/">Indie Gem</a></td><td>Keep</td><td datetime="2026-12-01T00:00:00Z"></td></tr></table>`;
   const steamDbOffers = parseSteamDbFreeHtml(html);
   assert.equal(steamDbOffers.length, 1);
   assert.equal(steamDbOffers[0].id, '999001');
+  assert.equal(steamDbOffers[0].originalPrice, 0);
+  assert.equal(steamDbOffers[0].hasPaidBaseline, true);
 
   setSteamSource('mock_source', async () => steamDbOffers);
   const fetched = await fetchSteamOffers({ sourceId: 'mock_source' });
@@ -188,11 +247,11 @@ test('Steam source can be swapped cleanly', async () => {
   setSteamSource('steam_search');
 });
 
-test('provider registry exposes active stores and keeps stubs disabled', () => {
+test('provider registry exposes all providers, resolves by id, and keeps stubs disabled', () => {
   const all = getAllProviders();
-  const active = getActiveProviders();
   assert.equal(all.length, 6);
-  assert.equal(active.map((p) => p.id).join(','), 'epic,steam');
+  assert.equal(getProvider('epic')?.name, 'Epic Games Store');
+  assert.equal(getProvider('missing'), null);
 
   const enabled = getEnabledProviders({
     stores: {

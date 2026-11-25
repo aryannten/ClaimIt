@@ -13,7 +13,6 @@ import { CLAIM_STATUS } from './constants.js';
 export const id = 'fab';
 export const name = 'Fab';
 export const stub = true;
-export const enabledByDefault = false;
 
 export async function fetchOffers() {
   // TODO: Implement Fab limited-time free asset discovery

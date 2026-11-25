@@ -13,7 +13,6 @@ import { CLAIM_STATUS } from './constants.js';
 export const id = 'prime';
 export const name = 'Prime Gaming';
 export const stub = true;
-export const enabledByDefault = false;
 
 export async function fetchOffers() {
   // TODO: Implement Prime Gaming offer discovery
