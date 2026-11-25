@@ -7,6 +7,15 @@ import {
   computeValueSaved
 } from '../storage.js';
 import { CLAIM_STATUS } from '../providers/constants.js';
+import { logger } from '../logger.js';
+import {
+  createSvgUse,
+  createIllustration,
+  formatCurrency,
+  formatCountdown,
+  formatTimeAgo,
+  formatTimeUntil
+} from '../ui/ui-helpers.js';
 
 const RELEVANT_STORAGE_KEYS = new Set([
   STORAGE_KEYS.SETTINGS,
@@ -15,14 +24,17 @@ const RELEVANT_STORAGE_KEYS = new Set([
   STORAGE_KEYS.META
 ]);
 
+const COVER_FALLBACK = '../../assets/cover-fallback.svg';
+
 const els = {
-  lastCheckedText: document.getElementById('lastCheckedText'),
-  pauseSwitch: document.getElementById('pauseSwitch'),
-  pauseLabel: document.getElementById('pauseLabel'),
-  openOptionsBtn: document.getElementById('openOptionsBtn'),
   dryRunBadge: document.getElementById('dryRunBadge'),
-  pausedBadge: document.getElementById('pausedBadge'),
+  pauseBtn: document.getElementById('pauseBtn'),
+  pauseBtnIcon: document.getElementById('pauseBtnIcon'),
+  pauseBtnLabel: document.getElementById('pauseBtnLabel'),
+  openOptionsBtn: document.getElementById('openOptionsBtn'),
+  statusLine: document.getElementById('statusLine'),
   checkNowBtn: document.getElementById('checkNowBtn'),
+  checkNowLabel: document.getElementById('checkNowLabel'),
   freeCount: document.getElementById('freeCount'),
   claimedCount: document.getElementById('claimedCount'),
   issuesCount: document.getElementById('issuesCount'),
@@ -33,6 +45,7 @@ const els = {
 
 let renderInFlight = false;
 let renderQueued = false;
+let lastIpcError = null;
 
 function isSafeHttpsUrl(url) {
   return typeof url === 'string' && url.startsWith('https://');
@@ -44,6 +57,7 @@ async function openStoreTab(url) {
 }
 
 async function sendRuntimeMessage(payload) {
+  lastIpcError = null;
   try {
     const res = await chrome.runtime.sendMessage(payload);
     if (res && res.ok === false) {
@@ -51,153 +65,165 @@ async function sendRuntimeMessage(payload) {
     }
     return res;
   } catch (err) {
-    els.lastCheckedText.textContent = err instanceof Error ? err.message : String(err);
+    lastIpcError = err instanceof Error ? err.message : String(err);
     return null;
   }
 }
 
-function formatRelativeTime(iso) {
-  if (!iso) return 'Never';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return 'Unknown';
-  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (diffSec < 60) return 'Just now';
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return date.toLocaleDateString();
-}
-
-function formatDateShort(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-function statusChip(status, dryRun, alreadyOwned) {
+function buildStatusBadge(item, isChecking) {
   const span = document.createElement('span');
-  if (dryRun && status === CLAIM_STATUS.CLAIMED) {
-    span.className = 'chip chip-warn';
-    span.textContent = 'Dry-run';
-  } else if (alreadyOwned && status === CLAIM_STATUS.CLAIMED) {
-    span.className = 'chip chip-muted';
-    span.textContent = 'Owned';
-  } else if (status === CLAIM_STATUS.CLAIMED) {
-    span.className = 'chip chip-claimed';
-    span.textContent = 'Claimed';
-  } else if (status === CLAIM_STATUS.NEEDS_USER) {
-    span.className = 'chip chip-needs';
-    span.textContent = 'Action needed';
-  } else if (status === CLAIM_STATUS.FAILED) {
-    span.className = 'chip chip-failed';
-    span.textContent = 'Failed';
+  if (isChecking && !item.status) {
+    span.className = 'badge badge-neutral';
+    span.append(createSvgUse('icon-clock'), document.createTextNode('Checking'));
+  } else if (item.dryRun && item.status === CLAIM_STATUS.CLAIMED) {
+    span.className = 'badge badge-needs';
+    span.append(createSvgUse('icon-shield'), document.createTextNode('Dry-run'));
+  } else if (item.alreadyOwned && item.status === CLAIM_STATUS.CLAIMED) {
+    span.className = 'badge badge-neutral';
+    span.append(createSvgUse('icon-check'), document.createTextNode('Owned'));
+  } else if (item.status === CLAIM_STATUS.CLAIMED) {
+    span.className = 'badge badge-claimed';
+    span.append(createSvgUse('icon-check'), document.createTextNode('Claimed'));
+  } else if (item.status === CLAIM_STATUS.NEEDS_USER) {
+    span.className = 'badge badge-needs';
+    span.append(createSvgUse('icon-alert'), document.createTextNode('Needs you'));
+  } else if (item.status === CLAIM_STATUS.FAILED) {
+    span.className = 'badge badge-failed';
+    span.append(createSvgUse('icon-close'), document.createTextNode('Failed'));
   } else {
-    span.className = 'chip chip-muted';
-    span.textContent = status || 'Free';
+    span.className = 'badge badge-neutral';
+    span.append(createSvgUse('icon-tag'), document.createTextNode('Free'));
   }
   return span;
 }
 
-function createOfferCard(item, mode) {
-  const card = document.createElement('article');
-  card.className = 'card';
+function formatPriceElement(item) {
+  const wrap = document.createElement('span');
+  wrap.className = 'price-pair';
+  const numVal = Number(item.originalPriceValue ?? 0);
+  const oldLabel = numVal > 0 ? formatCurrency(numVal, item.currency) : (item.originalPrice || '');
+  if (oldLabel && oldLabel !== '$0.00') {
+    const del = document.createElement('del');
+    del.className = 'price-old';
+    del.textContent = oldLabel;
+    wrap.appendChild(del);
+  }
+  const free = document.createElement('span');
+  free.className = 'price-free';
+  free.textContent = 'Free';
+  wrap.appendChild(free);
+  return wrap;
+}
+
+function formatHumanReason(item) {
+  if (!item.reason) return '';
+  if (item.status === CLAIM_STATUS.NEEDS_USER) {
+    if (/captcha/i.test(item.reason)) {
+      return `${item.storeName || item.store} is asking for a captcha. Open the page to finish.`;
+    }
+    if (/login/i.test(item.reason)) {
+      return `Sign in on ${item.storeName || item.store}, then open the page to claim.`;
+    }
+    if (/age/i.test(item.reason)) {
+      return `Age verification on ${item.storeName || item.store}. Open the page to finish.`;
+    }
+    return item.reason;
+  }
+  return item.reason;
+}
+
+function createOfferRow(item, mode, isChecking) {
+  const row = document.createElement('article');
+  row.className = 'offer-row';
 
   const img = document.createElement('img');
-  img.className = 'card-thumb';
-  img.src = isSafeHttpsUrl(item.image) ? item.image : '../../assets/icon-128.png';
-  img.alt = item.title || 'Game cover';
+  img.className = 'offer-thumb';
+  img.width = 76;
+  img.height = 44;
+  img.src = isSafeHttpsUrl(item.image) ? item.image : COVER_FALLBACK;
+  img.alt = item.title ? `${item.title} cover` : 'Game cover';
   img.addEventListener('error', () => {
-    img.src = '../../assets/icon-128.png';
+    if (!img.src.endsWith('cover-fallback.svg')) {
+      img.src = COVER_FALLBACK;
+    }
   });
-  card.appendChild(img);
+  row.appendChild(img);
 
-  const body = document.createElement('div');
-  body.className = 'card-body';
+  const main = document.createElement('div');
+  main.className = 'offer-main';
 
-  const titleRow = document.createElement('div');
-  titleRow.className = 'card-title-row';
   const title = document.createElement('h3');
-  title.className = 'card-title';
+  title.className = 'offer-title';
   title.textContent = item.title;
   title.title = item.title;
-  titleRow.appendChild(title);
-  titleRow.appendChild(statusChip(item.status, item.dryRun, item.alreadyOwned));
-  body.appendChild(titleRow);
+  main.appendChild(title);
 
   const meta = document.createElement('div');
-  meta.className = 'card-meta';
+  meta.className = 'offer-meta tabular';
 
-  const storeSpan = document.createElement('span');
-  storeSpan.textContent = item.storeName || item.store;
-  meta.appendChild(storeSpan);
+  const storeTag = document.createElement('span');
+  storeTag.className = 'store-tag';
+  storeTag.append(
+    createSvgUse(`store-${item.store || 'epic'}`, 'store-tile', 'stores.svg'),
+    document.createTextNode(item.storeName || item.store)
+  );
+  meta.appendChild(storeTag);
 
   if (item.label === 'DLC') {
-    const dlcChip = document.createElement('span');
-    dlcChip.className = 'chip chip-info';
-    dlcChip.textContent = 'DLC';
-    meta.appendChild(dlcChip);
+    const dlc = document.createElement('span');
+    dlc.className = 'badge badge-neutral';
+    dlc.textContent = 'DLC';
+    meta.appendChild(dlc);
   }
 
-  if (item.originalPrice) {
-    const priceSpan = document.createElement('span');
-    priceSpan.textContent = `Worth ${item.originalPrice}`;
-    meta.appendChild(priceSpan);
-  }
+  meta.appendChild(formatPriceElement(item));
 
+  const timing = document.createElement('span');
   if (mode === 'claimed' && item.claimedAt) {
-    const dateSpan = document.createElement('span');
-    dateSpan.textContent = `Claimed ${formatDateShort(item.claimedAt)}`;
-    meta.appendChild(dateSpan);
-  } else if (item.endDate) {
-    const endSpan = document.createElement('span');
-    endSpan.textContent = `Ends ${formatDateShort(item.endDate)}`;
-    meta.appendChild(endSpan);
+    timing.textContent = `Claimed ${formatTimeAgo(item.claimedAt)}`;
+  } else {
+    timing.textContent = formatCountdown(item.endDate);
   }
+  meta.appendChild(timing);
+  main.appendChild(meta);
 
-  body.appendChild(meta);
+  const statusLine = document.createElement('div');
+  statusLine.className = 'offer-status-line';
+  statusLine.appendChild(buildStatusBadge(item, isChecking));
+  main.appendChild(statusLine);
 
   if (item.reason && (item.status === CLAIM_STATUS.NEEDS_USER || item.status === CLAIM_STATUS.FAILED)) {
-    const reason = document.createElement('div');
-    reason.className = `card-reason ${item.status === CLAIM_STATUS.FAILED ? 'error' : ''}`;
-    reason.textContent = item.reason;
-    body.appendChild(reason);
+    const reason = document.createElement('p');
+    reason.className = 'offer-reason';
+    reason.textContent = formatHumanReason(item);
+    main.appendChild(reason);
   }
 
-  const actions = document.createElement('div');
-  actions.className = 'card-actions';
+  row.appendChild(main);
 
-  if (mode === 'free' || mode === 'issues') {
-    if (item.status !== CLAIM_STATUS.CLAIMED) {
-      const claimBtn = document.createElement('button');
-      claimBtn.className = 'btn btn-primary btn-sm';
-      claimBtn.textContent = item.status === CLAIM_STATUS.NEEDS_USER ? 'Open & Claim' : 'Claim';
-      claimBtn.addEventListener('click', async () => {
-        if (item.status === CLAIM_STATUS.NEEDS_USER) {
-          await openStoreTab(item.url);
-          return;
-        }
-        claimBtn.disabled = true;
-        claimBtn.textContent = 'Claiming...';
-        try {
-          await sendRuntimeMessage({
-            type: 'CLAIMIT_CLAIM_ONE',
-            store: item.store,
-            id: item.id
-          });
-        } finally {
-          await scheduleRender();
-        }
+  const actions = document.createElement('div');
+  actions.className = 'offer-actions';
+
+  if (mode !== 'claimed' && (item.status === CLAIM_STATUS.NEEDS_USER || item.status === CLAIM_STATUS.FAILED)) {
+    if (isSafeHttpsUrl(item.url)) {
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'btn btn-primary';
+      openBtn.append(createSvgUse('icon-external-link'), document.createTextNode('Open page'));
+      openBtn.addEventListener('click', () => {
+        openStoreTab(item.url);
       });
-      actions.appendChild(claimBtn);
+      actions.appendChild(openBtn);
     }
 
     if (mode === 'issues') {
       const retryBtn = document.createElement('button');
-      retryBtn.className = 'btn btn-sm';
-      retryBtn.textContent = 'Retry';
+      retryBtn.type = 'button';
+      retryBtn.className = 'btn';
+      retryBtn.append(createSvgUse('icon-refresh'), document.createTextNode('Retry'));
       retryBtn.addEventListener('click', async () => {
         retryBtn.disabled = true;
-        retryBtn.textContent = 'Retrying...';
+        retryBtn.textContent = 'Retrying…';
         try {
           await sendRuntimeMessage({
             type: 'CLAIMIT_CLAIM_ONE',
@@ -210,58 +236,192 @@ function createOfferCard(item, mode) {
       });
       actions.appendChild(retryBtn);
     }
-  }
-
-  if (isSafeHttpsUrl(item.url)) {
-    const openLinkBtn = document.createElement('button');
-    openLinkBtn.className = 'btn btn-sm';
-    openLinkBtn.textContent = 'Store';
-    openLinkBtn.addEventListener('click', () => {
+  } else if (mode === 'free' && item.status !== CLAIM_STATUS.CLAIMED) {
+    const claimBtn = document.createElement('button');
+    claimBtn.type = 'button';
+    claimBtn.className = 'btn btn-primary';
+    claimBtn.textContent = 'Claim';
+    claimBtn.addEventListener('click', async () => {
+      claimBtn.disabled = true;
+      claimBtn.textContent = 'Claiming…';
+      try {
+        await sendRuntimeMessage({
+          type: 'CLAIMIT_CLAIM_ONE',
+          store: item.store,
+          id: item.id
+        });
+      } finally {
+        await scheduleRender();
+      }
+    });
+    actions.appendChild(claimBtn);
+  } else if (isSafeHttpsUrl(item.url)) {
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'btn btn-ghost';
+    openBtn.setAttribute('aria-label', `Open ${item.title} store page`);
+    openBtn.append(createSvgUse('icon-external-link'), document.createTextNode('Open page'));
+    openBtn.addEventListener('click', () => {
       openStoreTab(item.url);
     });
-    actions.appendChild(openLinkBtn);
+    actions.appendChild(openBtn);
   }
 
-  body.appendChild(actions);
-  card.appendChild(body);
-  return card;
+  row.appendChild(actions);
+  return row;
 }
 
-function renderEmpty(container, message) {
-  const empty = document.createElement('div');
-  empty.className = 'empty-state';
-  empty.textContent = message;
-  container.appendChild(empty);
+function renderLoadingSkeleton(container) {
+  const list = document.createElement('div');
+  list.className = 'offer-list';
+  list.setAttribute('aria-busy', 'true');
+  for (let i = 0; i < 3; i++) {
+    const row = document.createElement('div');
+    row.className = 'skeleton-row';
+    const thumb = document.createElement('div');
+    thumb.className = 'skel-box skel-thumb';
+    const lines = document.createElement('div');
+    lines.className = 'skel-lines';
+    const l1 = document.createElement('div');
+    l1.className = 'skel-box skel-line';
+    const l2 = document.createElement('div');
+    l2.className = 'skel-box skel-line short';
+    lines.append(l1, l2);
+    row.append(thumb, lines);
+    list.appendChild(row);
+  }
+  container.appendChild(list);
+}
+
+async function renderStateBox(container, { illusId, title, desc, actionLabel, onAction }) {
+  const box = document.createElement('div');
+  box.className = 'state-box';
+
+  const illus = await createIllustration(illusId);
+  if (illus) box.appendChild(illus);
+
+  const heading = document.createElement('p');
+  heading.className = 'state-title';
+  heading.textContent = title;
+  box.appendChild(heading);
+
+  const text = document.createElement('p');
+  text.className = 'state-desc';
+  text.textContent = desc;
+  box.appendChild(text);
+
+  if (actionLabel && onAction) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-primary';
+    btn.textContent = actionLabel;
+    btn.addEventListener('click', onAction);
+    box.appendChild(btn);
+  }
+
+  container.appendChild(box);
+}
+
+function buildStatusSummary(settings, meta, alarm) {
+  if (settings.paused) {
+    return `Last checked ${formatTimeAgo(meta.lastCheckedAt)} · Automation paused`;
+  }
+  if (meta.isChecking) {
+    return 'Checking enabled stores for free offers…';
+  }
+  const hasAuto = Object.values(settings.stores || {}).some((s) => s?.enabled && s?.mode === 'auto');
+  const modeLabel = hasAuto ? 'Auto-claim on' : 'Notify-only mode';
+  const lastText = meta.lastCheckedAt ? `Last checked ${formatTimeAgo(meta.lastCheckedAt)}` : 'Not checked yet';
+  const nextText = alarm?.scheduledTime ? `Next check in ${formatTimeUntil(alarm.scheduledTime)}` : 'Schedule ready';
+  return `${lastText} · ${nextText} · ${modeLabel}`;
+}
+
+async function triggerCheck() {
+  els.checkNowBtn.disabled = true;
+  els.checkNowLabel.textContent = 'Checking…';
+  try {
+    await sendRuntimeMessage({ type: 'CLAIMIT_RUN_CHECK' });
+  } finally {
+    await scheduleRender();
+  }
 }
 
 async function render() {
-  const [settings, historyMap, currentOffers, meta] = await Promise.all([
+  const [settings, historyMap, currentOffers, meta, alarm, logs] = await Promise.all([
     getSettings(),
     getHistory(),
     getCurrentOffers(),
-    getMeta()
+    getMeta(),
+    chrome.alarms?.get ? chrome.alarms.get('claimit_check_alarm').catch(() => null) : Promise.resolve(null),
+    logger.getAll().catch(() => [])
   ]);
 
-  els.lastCheckedText.textContent = meta.isChecking
-    ? 'Checking stores now...'
-    : `Last checked: ${formatRelativeTime(meta.lastCheckedAt)}`;
+  const paused = Boolean(settings.paused);
+  els.pauseBtn.setAttribute('aria-checked', String(paused));
+  els.pauseBtn.setAttribute('aria-label', paused ? 'Resume automation' : 'Pause automation');
+  els.pauseBtnIcon.querySelector('use')?.setAttribute(
+    'href',
+    `../../assets/icons.svg#${paused ? 'icon-play' : 'icon-pause'}`
+  );
+  els.pauseBtnLabel.textContent = paused ? 'Resume' : 'Pause';
 
-  els.pauseSwitch.checked = Boolean(settings.paused);
-  els.pauseLabel.textContent = settings.paused ? 'Paused' : 'Active';
-  els.pausedBadge.classList.toggle('hidden', !settings.paused);
   els.dryRunBadge.classList.toggle('hidden', !settings.dryRun);
-  els.checkNowBtn.disabled = Boolean(meta.isChecking || settings.paused);
-  els.checkNowBtn.textContent = meta.isChecking ? 'Checking...' : 'Check now';
+  els.checkNowBtn.disabled = Boolean(meta.isChecking || paused);
+  els.checkNowLabel.textContent = meta.isChecking ? 'Checking…' : 'Check now';
+  els.statusLine.textContent = lastIpcError || buildStatusSummary(settings, meta, alarm);
+
+  const recentFetchErr = logs
+    .slice(-10)
+    .reverse()
+    .find((entry) => entry.level === 'error' && /fetchOffers failed|Unexpected error/i.test(entry.message));
 
   // Tab 1: Free now
   els.tabFree.replaceChildren();
   els.freeCount.textContent = String(currentOffers.length);
-  if (currentOffers.length === 0) {
-    renderEmpty(els.tabFree, 'No active free-to-keep offers cached yet. Click "Check now" to scan.');
-  } else {
-    for (const offer of currentOffers) {
-      els.tabFree.appendChild(createOfferCard(offer, 'free'));
+
+  if (meta.isChecking && currentOffers.length === 0) {
+    renderLoadingSkeleton(els.tabFree);
+  } else if (currentOffers.length === 0) {
+    if (navigator.onLine === false) {
+      await renderStateBox(els.tabFree, {
+        illusId: 'illus-offline',
+        title: 'You appear to be offline',
+        desc: 'Reconnect to check Epic Games Store and Steam for current free offers.',
+        actionLabel: 'Retry check',
+        onAction: triggerCheck
+      });
+    } else if (lastIpcError || recentFetchErr) {
+      await renderStateBox(els.tabFree, {
+        illusId: 'illus-store-changed',
+        title: 'Could not complete store check',
+        desc: lastIpcError || recentFetchErr.meta?.error || recentFetchErr.message,
+        actionLabel: 'Check now',
+        onAction: triggerCheck
+      });
+    } else if (!meta.lastCheckedAt) {
+      await renderStateBox(els.tabFree, {
+        illusId: 'illus-first-run',
+        title: 'Ready for your first check',
+        desc: 'Scan Epic Games Store and Steam using your logged-in browser sessions.',
+        actionLabel: 'Check now',
+        onAction: triggerCheck
+      });
+    } else {
+      await renderStateBox(els.tabFree, {
+        illusId: 'illus-empty-free',
+        title: 'No free games right now',
+        desc: 'Scheduled checks continue running automatically in the background.',
+        actionLabel: 'Check now',
+        onAction: triggerCheck
+      });
     }
+  } else {
+    const list = document.createElement('div');
+    list.className = 'offer-list';
+    for (const offer of currentOffers) {
+      list.appendChild(createOfferRow(offer, 'free', meta.isChecking));
+    }
+    els.tabFree.appendChild(list);
   }
 
   // Tab 2: Claimed (excludes dry-run and pre-existing owned items)
@@ -270,38 +430,48 @@ async function render() {
     .filter((h) => h.status === CLAIM_STATUS.CLAIMED && !h.dryRun && !h.alreadyOwned)
     .sort((a, b) => Date.parse(b.claimedAt || b.updatedAt || 0) - Date.parse(a.claimedAt || a.updatedAt || 0));
 
-  const saved = computeValueSaved(historyMap);
   els.claimedCount.textContent = String(claimed.length);
   els.tabClaimed.replaceChildren();
 
-  const summary = document.createElement('div');
-  summary.className = 'summary-card';
-  const summaryLeft = document.createElement('div');
-  const sumLbl = document.createElement('div');
-  sumLbl.className = 'summary-label';
-  sumLbl.textContent = 'Total Value Saved';
-  const sumVal = document.createElement('div');
-  sumVal.className = 'summary-value';
-  const extraCurrencies = Object.entries(saved.totalsByCurrency || {})
-    .filter(([cur]) => cur !== saved.currency)
-    .map(([cur, amt]) => `${cur} ${amt.toFixed(2)}`);
-  sumVal.textContent = extraCurrencies.length
-    ? `${saved.currency} ${saved.totalMajor.toFixed(2)} + ${extraCurrencies.join(', ')}`
-    : `${saved.currency} ${saved.totalMajor.toFixed(2)}`;
-  summaryLeft.append(sumLbl, sumVal);
-
-  const summaryRight = document.createElement('div');
-  summaryRight.className = 'last-checked';
-  summaryRight.textContent = `${claimed.length} game${claimed.length === 1 ? '' : 's'} claimed`;
-  summary.append(summaryLeft, summaryRight);
-  els.tabClaimed.appendChild(summary);
-
   if (claimed.length === 0) {
-    renderEmpty(els.tabClaimed, 'No claimed games in history yet.');
+    await renderStateBox(els.tabClaimed, {
+      illusId: 'illus-empty-free',
+      title: 'No claimed games yet',
+      desc: 'Free-to-keep games claimed by ClaimIt will appear here with total savings.',
+      actionLabel: 'Check now',
+      onAction: triggerCheck
+    });
   } else {
+    const saved = computeValueSaved(historyMap);
+    const strip = document.createElement('div');
+    strip.className = 'value-strip';
+
+    const lbl = document.createElement('span');
+    lbl.className = 'value-label';
+    lbl.append(
+      createSvgUse('icon-history'),
+      document.createTextNode(`Value saved (${claimed.length} ${claimed.length === 1 ? 'game' : 'games'})`)
+    );
+
+    const val = document.createElement('span');
+    val.className = 'value-amount tabular';
+    const extraCurrencies = Object.entries(saved.totalsByCurrency || {})
+      .filter(([cur]) => cur !== saved.currency)
+      .map(([cur, amt]) => formatCurrency(amt, cur));
+    const primaryFormatted = formatCurrency(saved.totalMajor, saved.currency);
+    val.textContent = extraCurrencies.length
+      ? `${primaryFormatted} + ${extraCurrencies.join(', ')}`
+      : primaryFormatted;
+
+    strip.append(lbl, val);
+    els.tabClaimed.appendChild(strip);
+
+    const list = document.createElement('div');
+    list.className = 'offer-list';
     for (const item of claimed) {
-      els.tabClaimed.appendChild(createOfferCard(item, 'claimed'));
+      list.appendChild(createOfferRow(item, 'claimed', false));
     }
+    els.tabClaimed.appendChild(list);
   }
 
   // Tab 3: Issues
@@ -311,12 +481,20 @@ async function render() {
 
   els.issuesCount.textContent = String(issues.length);
   els.tabIssues.replaceChildren();
+
   if (issues.length === 0) {
-    renderEmpty(els.tabIssues, 'No pending actions or failed claims.');
+    await renderStateBox(els.tabIssues, {
+      illusId: 'illus-all-claimed',
+      title: 'Everything is clear',
+      desc: 'No pending verifications, captchas, or failed claims need your attention.'
+    });
   } else {
+    const list = document.createElement('div');
+    list.className = 'offer-list';
     for (const item of issues) {
-      els.tabIssues.appendChild(createOfferCard(item, 'issues'));
+      list.appendChild(createOfferRow(item, 'issues', false));
     }
+    els.tabIssues.appendChild(list);
   }
 }
 
@@ -337,42 +515,55 @@ async function scheduleRender() {
   }
 }
 
-document.querySelectorAll('.tab').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const target = btn.dataset.tab;
-    document.querySelectorAll('.tab').forEach((t) => {
-      t.classList.toggle('active', t === btn);
-      t.setAttribute('aria-selected', String(t === btn));
-    });
-    document.querySelectorAll('.tab-panel').forEach((panel) => {
-      panel.classList.toggle('active', panel.id === `tab-${target}`);
-    });
+const tabButtons = Array.from(document.querySelectorAll('.tab'));
+
+function activateTab(targetBtn) {
+  const target = targetBtn.dataset.tab;
+  for (const btn of tabButtons) {
+    const active = btn === targetBtn;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', String(active));
+    btn.tabIndex = active ? 0 : -1;
+  }
+  document.querySelectorAll('.tab-panel').forEach((panel) => {
+    const show = panel.id === `tab-${target}`;
+    panel.classList.toggle('active', show);
+    panel.hidden = !show;
+  });
+}
+
+tabButtons.forEach((btn, index) => {
+  btn.addEventListener('click', () => activateTab(btn));
+  btn.addEventListener('keydown', (ev) => {
+    let nextIdx = -1;
+    if (ev.key === 'ArrowRight') nextIdx = (index + 1) % tabButtons.length;
+    else if (ev.key === 'ArrowLeft') nextIdx = (index - 1 + tabButtons.length) % tabButtons.length;
+    else if (ev.key === 'Home') nextIdx = 0;
+    else if (ev.key === 'End') nextIdx = tabButtons.length - 1;
+    if (nextIdx >= 0) {
+      ev.preventDefault();
+      tabButtons[nextIdx].focus();
+      activateTab(tabButtons[nextIdx]);
+    }
   });
 });
 
-els.pauseSwitch.addEventListener('change', async () => {
+els.pauseBtn.addEventListener('click', async () => {
+  const currentlyPaused = els.pauseBtn.getAttribute('aria-checked') === 'true';
   await sendRuntimeMessage({
     type: 'CLAIMIT_SET_PAUSED',
-    paused: els.pauseSwitch.checked
+    paused: !currentlyPaused
   });
   await scheduleRender();
 });
 
-els.checkNowBtn.addEventListener('click', async () => {
-  els.checkNowBtn.disabled = true;
-  els.checkNowBtn.textContent = 'Checking...';
-  try {
-    await sendRuntimeMessage({ type: 'CLAIMIT_RUN_CHECK' });
-  } finally {
-    await scheduleRender();
-  }
-});
+els.checkNowBtn.addEventListener('click', triggerCheck);
 
 els.openOptionsBtn.addEventListener('click', () => {
   chrome.runtime.openOptionsPage();
 });
 
-chrome.storage.onChanged.addListener((changes, areaName) => {
+chrome.storage?.onChanged?.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
   if (Object.keys(changes).some((k) => RELEVANT_STORAGE_KEYS.has(k))) {
     scheduleRender();
