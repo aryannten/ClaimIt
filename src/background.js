@@ -2,7 +2,7 @@
  * ClaimIt MV3 Background Service Worker
  * Uses a once-daily randomized one-shot alarm (chrome.alarms with `when`),
  * delayed missed-scan catch-up on startup/install, notification clicks, and UI IPC.
- * Zero timers (no setTimeout/setInterval), zero periodInMinutes, zero idle global state.
+ * Runs exclusively via Chrome events with no background timers or idle state.
  */
 
 import { runCheckCycle, claimSingleOffer, abortActiveAutomation } from './engine.js';

@@ -66,9 +66,11 @@ function mergeSettings(raw = {}) {
       ...(raw.stores?.[id] || {})
     };
   }
-  const merged = {
-    ...DEFAULT_SETTINGS,
-    ...raw,
+  return {
+    paused: Boolean(raw.paused ?? DEFAULT_SETTINGS.paused),
+    dryRun: Boolean(raw.dryRun ?? DEFAULT_SETTINGS.dryRun),
+    currency: typeof raw.currency === 'string' ? raw.currency : DEFAULT_SETTINGS.currency,
+    remoteConfigUrl: typeof raw.remoteConfigUrl === 'string' ? raw.remoteConfigUrl : DEFAULT_SETTINGS.remoteConfigUrl,
     stores: mergedStores,
     notifications: {
       chrome: raw.notifications?.chrome ?? DEFAULT_SETTINGS.notifications.chrome,
@@ -82,9 +84,6 @@ function mergeSettings(raw = {}) {
       }
     }
   };
-  delete merged.checkIntervalHours;
-  delete merged.thursdayFridayHourlyBoost;
-  return merged;
 }
 
 /**

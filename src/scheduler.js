@@ -1,6 +1,6 @@
 /**
  * Once-daily randomized one-shot scheduler built on chrome.alarms ({ when }).
- * Uses zero timers (no setTimeout/setInterval) and zero periodInMinutes polling.
+ * Schedules single alarms only, without polling or worker timers.
  */
 
 import { getMeta, updateMeta } from './storage.js';
@@ -110,7 +110,6 @@ export async function ensureAlarmAt(whenMs) {
   const existing = await chrome.alarms.get(CHECK_ALARM_NAME);
   if (
     existing &&
-    !existing.periodInMinutes &&
     Number.isFinite(existing.scheduledTime) &&
     Math.abs(existing.scheduledTime - whenMs) < 1000
   ) {
@@ -178,7 +177,6 @@ export async function syncScheduleOnStartup({
     const existing = await chrome.alarms.get(CHECK_ALARM_NAME);
     if (
       existing &&
-      !existing.periodInMinutes &&
       Number.isFinite(existing.scheduledTime) &&
       existing.scheduledTime > nowMs &&
       existing.scheduledTime <= nowMs + CATCHUP_MAX_DELAY_MS + 5000
