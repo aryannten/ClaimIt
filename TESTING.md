@@ -36,7 +36,7 @@ Follow these steps to load ClaimIt unpacked in Chrome (or Brave) and verify all 
 1. Set a store with an active free offer to **Notify only** (or test with a `NEEDS_USER` offer / webhook test).
 2. Click **Check now** in the popup.
 3. **Expected:**
-   - A persistent Chrome notification appears: `"<Game> is free on <Store> — claim it now"` with **Claim now** and **Dismiss** buttons.
+   - A persistent Chrome notification appears with the game title, store availability, **Claim now**, and **Dismiss** buttons.
    - Clicking **Claim now** opens/focuses the exact store page tab and clears the notification.
    - Clicking **Dismiss** closes the notification without opening a tab.
 
