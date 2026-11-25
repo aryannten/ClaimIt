@@ -24,6 +24,7 @@ export default [
         chrome: 'readonly',
         fetch: 'readonly',
         AbortController: 'readonly',
+        navigator: 'readonly',
         URL: 'readonly',
         Intl: 'readonly',
         setTimeout: 'readonly',
