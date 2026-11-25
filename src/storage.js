@@ -9,9 +9,16 @@ export const STORAGE_KEYS = {
   HISTORY: 'claimit_history',
   CURRENT_OFFERS: 'claimit_current_offers',
   META: 'claimit_meta',
+  CYCLE_LOCK: 'claimit_cycle_lock',
   REMOTE_CONFIG_CACHE: 'claimit_remote_config_cache',
   NOTIFICATION_STATE: 'claimit_notification_state'
 };
+
+export const CYCLE_LOCK_TTL_MS = 5 * 60 * 1000;
+
+function hasChromeStorage() {
+  return typeof chrome !== 'undefined' && Boolean(chrome?.storage?.local);
+}
 
 export const DEFAULT_SETTINGS = {
   paused: false,
@@ -78,34 +85,42 @@ export function makeOfferKey(store, id) {
 }
 
 /**
- * Pure helper to calculate total saved value across claimed items.
+ * Pure helper to calculate total saved value across newly claimed items.
+ * Skips dry-run entries and pre-owned library games (`alreadyOwned: true`).
  * @param {Record<string, object>} historyMap
- * @returns {{ totalMajor: number, count: number, currency: string }}
+ * @returns {{ totalMajor: number, count: number, currency: string, totalsByCurrency: Record<string, number> }}
  */
 export function computeValueSaved(historyMap) {
   const items = Object.values(historyMap || {});
-  let totalMajor = 0;
+  const totalsByCurrency = {};
   let count = 0;
-  let currency = 'USD';
 
   for (const item of items) {
-    if (!item || item.status !== 'CLAIMED' || item.dryRun === true) continue;
+    if (!item || item.status !== 'CLAIMED' || item.dryRun === true || item.alreadyOwned === true) {
+      continue;
+    }
     count += 1;
-    if (item.currency) currency = item.currency;
+    const cur = item.currency || 'USD';
     const price = Number(item.originalPriceValue ?? item.originalPrice ?? 0);
     if (Number.isFinite(price) && price > 0) {
-      totalMajor += price;
+      totalsByCurrency[cur] = Math.round(((totalsByCurrency[cur] || 0) + price) * 100) / 100;
     }
   }
 
+  const currencies = Object.keys(totalsByCurrency);
+  const currency = currencies.includes('USD') ? 'USD' : (currencies[0] || 'USD');
+  const totalMajor = totalsByCurrency[currency] || 0;
+
   return {
-    totalMajor: Math.round(totalMajor * 100) / 100,
+    totalMajor,
     count,
-    currency
+    currency,
+    totalsByCurrency
   };
 }
 
 export async function getSettings() {
+  if (!hasChromeStorage()) return mergeSettings();
   const data = await chrome.storage.local.get(STORAGE_KEYS.SETTINGS);
   return mergeSettings(data[STORAGE_KEYS.SETTINGS]);
 }
@@ -132,11 +147,14 @@ export async function saveSettings(partial) {
       }
     }
   });
-  await chrome.storage.local.set({ [STORAGE_KEYS.SETTINGS]: next });
+  if (hasChromeStorage()) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.SETTINGS]: next });
+  }
   return next;
 }
 
 export async function getHistory() {
+  if (!hasChromeStorage()) return {};
   const data = await chrome.storage.local.get(STORAGE_KEYS.HISTORY);
   return data[STORAGE_KEYS.HISTORY] && typeof data[STORAGE_KEYS.HISTORY] === 'object'
     ? data[STORAGE_KEYS.HISTORY]
@@ -155,11 +173,14 @@ export async function upsertHistoryEntry(entry) {
     updatedAt: now,
     claimedAt: entry.status === 'CLAIMED' ? (existing.claimedAt || now) : existing.claimedAt || null
   };
-  await chrome.storage.local.set({ [STORAGE_KEYS.HISTORY]: history });
+  if (hasChromeStorage()) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.HISTORY]: history });
+  }
   return history[key];
 }
 
 export async function clearHistory() {
+  if (!hasChromeStorage()) return;
   await chrome.storage.local.set({
     [STORAGE_KEYS.HISTORY]: {},
     [STORAGE_KEYS.CURRENT_OFFERS]: [],
@@ -168,15 +189,20 @@ export async function clearHistory() {
 }
 
 export async function getCurrentOffers() {
+  if (!hasChromeStorage()) return [];
   const data = await chrome.storage.local.get(STORAGE_KEYS.CURRENT_OFFERS);
   return Array.isArray(data[STORAGE_KEYS.CURRENT_OFFERS]) ? data[STORAGE_KEYS.CURRENT_OFFERS] : [];
 }
 
 export async function setCurrentOffers(offers) {
+  if (!hasChromeStorage()) return;
   await chrome.storage.local.set({ [STORAGE_KEYS.CURRENT_OFFERS]: offers });
 }
 
 export async function getMeta() {
+  if (!hasChromeStorage()) {
+    return { lastCheckedAt: null, lastCycleId: null, isChecking: false };
+  }
   const data = await chrome.storage.local.get(STORAGE_KEYS.META);
   return data[STORAGE_KEYS.META] && typeof data[STORAGE_KEYS.META] === 'object'
     ? data[STORAGE_KEYS.META]
@@ -186,11 +212,50 @@ export async function getMeta() {
 export async function updateMeta(partial) {
   const current = await getMeta();
   const next = { ...current, ...partial };
-  await chrome.storage.local.set({ [STORAGE_KEYS.META]: next });
+  if (hasChromeStorage()) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.META]: next });
+  }
   return next;
 }
 
+/**
+ * Acquire a persistent cycle lock in chrome.storage.local so overlapping alarms
+ * across service worker restarts never double-claim. Expires stale locks after TTL.
+ * @param {string} ownerId
+ * @param {number} [nowMs=Date.now()]
+ * @param {number} [ttlMs=CYCLE_LOCK_TTL_MS]
+ * @returns {Promise<boolean>}
+ */
+export async function acquireCycleLock(ownerId, nowMs = Date.now(), ttlMs = CYCLE_LOCK_TTL_MS) {
+  if (!hasChromeStorage()) return true;
+  const data = await chrome.storage.local.get(STORAGE_KEYS.CYCLE_LOCK);
+  const existing = data[STORAGE_KEYS.CYCLE_LOCK];
+  if (
+    existing &&
+    existing.ownerId &&
+    existing.ownerId !== ownerId &&
+    Number.isFinite(existing.acquiredAtMs) &&
+    nowMs - existing.acquiredAtMs < ttlMs
+  ) {
+    return false;
+  }
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.CYCLE_LOCK]: { ownerId, acquiredAtMs: nowMs }
+  });
+  return true;
+}
+
+export async function releaseCycleLock(ownerId) {
+  if (!hasChromeStorage()) return;
+  const data = await chrome.storage.local.get(STORAGE_KEYS.CYCLE_LOCK);
+  const existing = data[STORAGE_KEYS.CYCLE_LOCK];
+  if (!existing || !ownerId || existing.ownerId === ownerId) {
+    await chrome.storage.local.remove(STORAGE_KEYS.CYCLE_LOCK);
+  }
+}
+
 export async function getNotificationState() {
+  if (!hasChromeStorage()) return {};
   const data = await chrome.storage.local.get(STORAGE_KEYS.NOTIFICATION_STATE);
   return data[STORAGE_KEYS.NOTIFICATION_STATE] && typeof data[STORAGE_KEYS.NOTIFICATION_STATE] === 'object'
     ? data[STORAGE_KEYS.NOTIFICATION_STATE]
@@ -198,14 +263,17 @@ export async function getNotificationState() {
 }
 
 export async function setNotificationState(state) {
+  if (!hasChromeStorage()) return;
   await chrome.storage.local.set({ [STORAGE_KEYS.NOTIFICATION_STATE]: state });
 }
 
 export async function getCachedRemoteConfig() {
+  if (!hasChromeStorage()) return null;
   const data = await chrome.storage.local.get(STORAGE_KEYS.REMOTE_CONFIG_CACHE);
   return data[STORAGE_KEYS.REMOTE_CONFIG_CACHE] || null;
 }
 
 export async function setCachedRemoteConfig(payload) {
+  if (!hasChromeStorage()) return;
   await chrome.storage.local.set({ [STORAGE_KEYS.REMOTE_CONFIG_CACHE]: payload });
 }
