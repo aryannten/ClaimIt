@@ -55,6 +55,8 @@ claimit-extension/
     └── remote-config.test.js
 ```
 
+Manual verification steps for Chrome/Brave are documented in [TESTING.md](TESTING.md).
+
 ## Permissions Explained
 
 ClaimIt requests the minimum permissions required for MV3 operation:
