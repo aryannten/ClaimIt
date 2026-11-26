@@ -15,8 +15,8 @@ import { closeTabSafely } from './providers/tab-helpers.js';
 import { logger } from './logger.js';
 
 export const STORE_LOGIN_URLS = {
-  epic: 'https://store.epicgames.com/login?redirectUrl=' +
-    encodeURIComponent('https://store.epicgames.com/en-US/free-games'),
+  epic: 'https://store.epicgames.com/login?lang=en-US&state=' +
+    encodeURIComponent('/en-US/free-games'),
   steam: 'https://store.steampowered.com/login/?redir=' +
     encodeURIComponent('https://store.steampowered.com/')
 };
@@ -29,12 +29,18 @@ export function parseSteamSessionHtml(html) {
   const source = String(html || '');
   if (!source) return { signedIn: null, accountName: null };
 
-  const pulldownMatch = source.match(/id="account_pulldown"[^>]*>([\s\S]*?)<\/span>/i);
+  const pulldownMatch = source.match(
+    /id=["']account_pulldown["'][^>]*>([\s\S]*?)<\/(?:span|button|a|div)>/i
+  );
   if (pulldownMatch) {
     const cleanName = pulldownMatch[1].replace(/<[^>]+>/g, '').trim() || null;
     return { signedIn: true, accountName: cleanName };
   }
-  if (/global_action_link[^>]*href="[^"]*\/login/i.test(source)) {
+  const steamIdMatch = source.match(/\bg_steamID\s*=\s*["'](\d{10,})["']/);
+  if (steamIdMatch) {
+    return { signedIn: true, accountName: null };
+  }
+  if (/global_action_link[^>]*href=["'][^"']*\/login/i.test(source)) {
     return { signedIn: false, accountName: null };
   }
   return { signedIn: null, accountName: null };
@@ -77,7 +83,7 @@ export function isLoginCompletionUrl(storeId, url) {
   if (storeId === 'epic') {
     return (
       url.startsWith('https://store.epicgames.com/') &&
-      !/\/login\b|\/id\/|authenticate|callback/i.test(url)
+      !/\/login\b|\/id\/|authenticate|callback|[?&]code=/i.test(url)
     );
   }
   if (storeId === 'steam') {
@@ -90,20 +96,27 @@ export function isLoginCompletionUrl(storeId, url) {
 }
 
 /**
- * Open the official store sign-in page in an active tab and record it so ClaimIt
- * detects login completion and immediately auto-claims available offers.
+ * Open the official store sign-in page in a new tab, record it before activating
+ * (so extension popups never close mid-storage write), then bring it to focus.
  */
 export async function startStoreSignIn(storeId) {
   if (!isSupportedLoginStore(storeId)) {
     throw new Error(`Unsupported sign-in store: ${String(storeId || '')}`);
   }
   const loginUrl = STORE_LOGIN_URLS[storeId];
-  const tab = await chrome.tabs.create({ url: loginUrl, active: true });
+  const hasTabsUpdate = typeof chrome.tabs?.update === 'function';
+  const tab = await chrome.tabs.create({ url: loginUrl, active: !hasTabsUpdate });
   await setPendingSignIn({
     storeId,
     tabId: tab.id,
     startedAt: new Date().toISOString()
   });
+  if (hasTabsUpdate) {
+    await chrome.tabs.update(tab.id, { active: true });
+    if (tab.windowId !== undefined && chrome.windows?.update) {
+      await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    }
+  }
   await logger.info('accounts', `Opened ${storeId} sign-in tab`, { tabId: tab.id });
   return { tabId: tab.id, storeId };
 }
@@ -117,7 +130,6 @@ export async function handleSignInTabUpdated(tabId, changeInfo, tab, onSignedIn 
   if (!pending || pending.tabId !== tabId) return false;
 
   const url = changeInfo?.url || tab?.url || '';
-  if (changeInfo?.status !== 'complete' && !changeInfo?.url) return false;
   if (!isLoginCompletionUrl(pending.storeId, url)) return false;
   if (changeInfo?.status !== 'complete') return false;
 

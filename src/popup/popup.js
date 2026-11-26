@@ -24,6 +24,7 @@ import {
 import { CLAIM_STATUS } from '../providers/constants.js';
 import { logger } from '../logger.js';
 import { isAllowedStoreUrl } from '../url-validator.js';
+import { startStoreSignIn } from '../accounts.js';
 import {
   createSvgUse,
   createIllustration,
@@ -85,6 +86,16 @@ function isSafeHttpsUrl(url) {
 async function openStoreTab(url) {
   if (!isSafeHttpsUrl(url)) return;
   await chrome.tabs.create({ url, active: true });
+}
+
+async function triggerStoreSignIn(storeId) {
+  lastIpcError = null;
+  try {
+    await startStoreSignIn(storeId);
+  } catch (err) {
+    lastIpcError = err instanceof Error ? err.message : String(err);
+    await scheduleRender();
+  }
 }
 
 async function sendRuntimeMessage(payload) {
@@ -264,7 +275,7 @@ function createOfferRow(item, mode, isChecking, priceContext) {
       signInBtn.className = 'btn btn-primary';
       signInBtn.textContent = 'Sign in & claim';
       signInBtn.addEventListener('click', () => {
-        sendRuntimeMessage({ type: 'CLAIMIT_SIGN_IN', store: item.store });
+        triggerStoreSignIn(item.store);
       });
       actions.appendChild(signInBtn);
     } else if (isSafeHttpsUrl(item.url)) {
@@ -450,7 +461,7 @@ function renderAccountsBar(accounts) {
       signInBtn.className = 'btn btn-primary btn-account';
       signInBtn.textContent = 'Sign in';
       signInBtn.addEventListener('click', () => {
-        sendRuntimeMessage({ type: 'CLAIMIT_SIGN_IN', store: store.id });
+        triggerStoreSignIn(store.id);
       });
       pill.appendChild(signInBtn);
     }
