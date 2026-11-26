@@ -24,7 +24,8 @@ export const STORAGE_KEYS = {
   FX_RATES: 'claimit_fx_rates',
   ACCOUNTS: 'claimit_accounts',
   PENDING_SIGNIN: 'claimit_pending_signin',
-  STEAM_DEALS: 'claimit_steam_deals'
+  STEAM_DEALS: 'claimit_steam_deals',
+  STEAM_DEALS_META: 'claimit_steam_deals_meta'
 };
 
 export const MIN_STEAM_DISCOUNT_LIMIT = 40;
@@ -584,8 +585,40 @@ export async function getSteamDeals() {
   return Array.isArray(data[STORAGE_KEYS.STEAM_DEALS]) ? data[STORAGE_KEYS.STEAM_DEALS] : [];
 }
 
-export async function setSteamDeals(deals) {
+const DEFAULT_STEAM_DEALS_META = {
+  startOffset: 0,
+  endOffset: 0,
+  nextOffset: 0,
+  totalCount: null,
+  minDiscount: null
+};
+
+export async function getSteamDealsMeta() {
+  if (!hasChromeStorage()) return { ...DEFAULT_STEAM_DEALS_META };
+  const data = await chrome.storage.local.get(STORAGE_KEYS.STEAM_DEALS_META);
+  const raw = data[STORAGE_KEYS.STEAM_DEALS_META];
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_STEAM_DEALS_META };
+  return {
+    startOffset: Math.max(0, Number(raw.startOffset) || 0),
+    endOffset: Math.max(0, Number(raw.endOffset) || 0),
+    nextOffset: Math.max(0, Number(raw.nextOffset) || 0),
+    totalCount: Number.isFinite(raw.totalCount) ? raw.totalCount : null,
+    minDiscount: Number.isFinite(raw.minDiscount) ? raw.minDiscount : null
+  };
+}
+
+export async function setSteamDeals(deals, meta = null) {
   if (!hasChromeStorage()) return;
   const clean = Array.isArray(deals) ? deals.slice(0, MAX_STEAM_DEALS) : [];
-  await chrome.storage.local.set({ [STORAGE_KEYS.STEAM_DEALS]: clean });
+  const payload = { [STORAGE_KEYS.STEAM_DEALS]: clean };
+  if (meta && typeof meta === 'object') {
+    payload[STORAGE_KEYS.STEAM_DEALS_META] = {
+      startOffset: Math.max(0, Number(meta.startOffset) || 0),
+      endOffset: Math.max(0, Number(meta.endOffset) || 0),
+      nextOffset: Math.max(0, Number(meta.nextOffset) || 0),
+      totalCount: Number.isFinite(meta.totalCount) ? meta.totalCount : null,
+      minDiscount: Number.isFinite(meta.minDiscount) ? meta.minDiscount : null
+    };
+  }
+  await chrome.storage.local.set(payload);
 }

@@ -132,7 +132,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
           return refreshStoreSessions();
 
         case 'CLAIMIT_REFRESH_STEAM_DEALS':
-          return refreshSteamDeals();
+          return refreshSteamDeals({ advance: Boolean(message.advance) });
 
         case 'CLAIMIT_SEARCH_STEAM_DEALS':
           if (typeof message.query !== 'string' || message.query.length > 80) {

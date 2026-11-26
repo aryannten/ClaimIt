@@ -571,16 +571,26 @@ async function fetchOwnedAppIds(endpoints, context, fetchFn) {
 }
 
 /**
- * Fetch paid discounted Steam deals (paginated up to 500 Top Sellers rows until collecting
- * up to 200 matching deals, or live Steam catalog search).
+ * Fetch paid discounted Steam deals along with pagination cursor metadata
+ * (scans up to 500 rows per batch from `startOffset` until collecting up to 200 matches).
  * Never auto-claimed; strictly for user browsing in the Deals tab.
- * @param {{ config?: object, region?: { country?: string }|null, minDiscount?: number, query?: string, sortBy?: 'popular'|'reviews'|'discount'|'price', maxPages?: number, targetDeals?: number, steamUserdata?: object, fetchFn?: typeof fetch }} [context]
- * @returns {Promise<object[]>}
+ * @param {{ config?: object, region?: { country?: string }|null, minDiscount?: number, startOffset?: number, query?: string, sortBy?: 'popular'|'reviews'|'discount'|'price', maxPages?: number, targetDeals?: number, steamUserdata?: object, fetchFn?: typeof fetch }} [context]
+ * @returns {Promise<{ deals: object[], startOffset: number, endOffset: number, nextOffset: number, totalCount: number|null, reachedEnd: boolean }>}
  */
-export async function fetchSteamDeals(context = {}) {
+export async function fetchSteamDealsWithMeta(context = {}) {
   const query = typeof context.query === 'string' ? context.query.trim() : '';
   const minDiscount = Number(context.minDiscount ?? 40);
-  if (minDiscount >= 100) return [];
+  const startOffset = Math.max(0, Math.floor(Number(context.startOffset) || 0));
+  if (minDiscount >= 100) {
+    return {
+      deals: [],
+      startOffset: 0,
+      endOffset: 0,
+      nextOffset: 0,
+      totalCount: null,
+      reachedEnd: false
+    };
+  }
 
   const endpoints = context.config?.stores?.steam?.endpoints || {};
   const country = normalizeCountryCode(context.region?.country);
@@ -594,9 +604,12 @@ export async function fetchSteamDeals(context = {}) {
   const seenIds = new Set();
   const collected = [];
   let eligibleCount = 0;
+  let lastEndOffset = startOffset;
+  let totalCount = null;
+  let reachedEnd = false;
 
   for (let page = 0; page < maxPages; page += 1) {
-    const start = page * pageSize;
+    const start = startOffset + page * pageSize;
     const pageUrl = buildSteamDealsPageUrl(endpoints.dealsSearch, {
       country,
       start,
@@ -625,6 +638,8 @@ export async function fetchSteamDeals(context = {}) {
     const rawHtml = payload?.results_html || '';
     const rawRowCount = (rawHtml.match(/search_result_row/gi) || []).length;
     const parsed = parseSteamSearchHtml(rawHtml, endpoints, { country });
+    lastEndOffset = start + Math.max(rawRowCount, parsed.length);
+
     for (let i = 0; i < parsed.length; i += 1) {
       const item = parsed[i];
       if (!item?.id || seenIds.has(item.id)) continue;
@@ -648,19 +663,47 @@ export async function fetchSteamDeals(context = {}) {
       }
     }
 
-    const totalCount = Number(payload?.total_count);
+    const parsedTotal = Number(payload?.total_count);
+    if (Number.isFinite(parsedTotal) && parsedTotal >= 0) {
+      totalCount = parsedTotal;
+    }
+
     if (
       rawRowCount < pageSize ||
-      (Number.isFinite(totalCount) && start + pageSize >= totalCount) ||
-      eligibleCount >= targetDeals
+      (totalCount !== null && start + pageSize >= totalCount)
     ) {
+      reachedEnd = true;
+      break;
+    }
+    if (eligibleCount >= targetDeals) {
       break;
     }
   }
 
-  return filterSteamDiscountDeals(collected, Math.max(40, minDiscount), ownedIds, {
+  const deals = filterSteamDiscountDeals(collected, Math.max(40, minDiscount), ownedIds, {
     sortBy: context.sortBy || 'popular'
   }).slice(0, targetDeals);
+
+  return {
+    deals,
+    startOffset,
+    endOffset: lastEndOffset,
+    nextOffset: reachedEnd ? 0 : lastEndOffset,
+    totalCount,
+    reachedEnd
+  };
+}
+
+/**
+ * Fetch paid discounted Steam deals (paginated up to 500 Top Sellers rows until collecting
+ * up to 200 matching deals, or live Steam catalog search).
+ * Never auto-claimed; strictly for user browsing in the Deals tab.
+ * @param {object} [context]
+ * @returns {Promise<object[]>}
+ */
+export async function fetchSteamDeals(context = {}) {
+  const { deals } = await fetchSteamDealsWithMeta(context);
+  return deals;
 }
 
 /**

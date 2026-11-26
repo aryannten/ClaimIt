@@ -8,10 +8,13 @@ import assert from 'node:assert/strict';
 import {
   parseSteamSearchHtml,
   filterSteamDiscountDeals,
-  fetchSteamDeals
+  fetchSteamDeals,
+  fetchSteamDealsWithMeta
 } from '../src/providers/steam.js';
+import { refreshSteamDeals } from '../src/engine.js';
 import { classifyOffers } from '../src/classifier.js';
 import {
+  STORAGE_KEYS,
   clampSteamMinDiscount,
   DEFAULT_STEAM_MIN_DISCOUNT,
   normalizeSteamDealsSort,
@@ -342,5 +345,95 @@ describe('Steam discount deals filter & slider range', () => {
 
     assert.equal(lowFetches, 4);
     assert.equal(earlyStopDeals.length, 200);
+  });
+
+  it('refreshSteamDeals({ advance: true }) cycles to different batches on Refresh and wraps at end', async () => {
+    const store = {};
+    globalThis.chrome = {
+      storage: {
+        local: {
+          async get(keys) {
+            if (typeof keys === 'string') return { [keys]: store[keys] };
+            return { ...store };
+          },
+          async set(obj) {
+            Object.assign(store, obj);
+          }
+        }
+      }
+    };
+
+    try {
+      const makeRows = (startId, count) =>
+        Array.from({ length: count }, (_, idx) => {
+          const id = startId + idx;
+          return `
+            <a href="https://store.steampowered.com/app/${id}/Game_${id}/" data-ds-appid="${id}" class="search_result_row">
+              <span class="title">Batch Game ${id}</span>
+              <div class="discount_block" data-price-final="299" data-discount="80">
+                <div class="discount_original_price">₹1,499.00</div>
+                <div class="discount_final_price">₹299.00</div>
+              </div>
+            </a>
+          `;
+        }).join('');
+
+      const startsSeen = [];
+      const mockFetch = async (href) => {
+        if (href.includes('userdata')) {
+          return new Response(JSON.stringify({ rgOwnedApps: [] }), { status: 200 });
+        }
+        const start = Number(new URL(href).searchParams.get('start') || 0);
+        startsSeen.push(start);
+        // Simulate 1000 total results, returning distinct app IDs per 500-row batch,
+        // and empty results once start >= 1000.
+        if (start >= 1000) {
+          return new Response(JSON.stringify({ success: 1, total_count: 1000, results_html: '' }), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify({
+            success: 1,
+            total_count: 1200,
+            results_html: makeRows(start + 10000, 50)
+          }),
+          { status: 200 }
+        );
+      };
+
+      // Check direct cursor helper first (maxPages=2 -> advances nextOffset cleanly to 100)
+      const directB1 = await fetchSteamDealsWithMeta({
+        minDiscount: 75,
+        maxPages: 2,
+        startOffset: 0,
+        steamUserdata: { rgOwnedApps: [] },
+        fetchFn: mockFetch
+      });
+      assert.equal(directB1.startOffset, 0);
+      assert.equal(directB1.endOffset, 100);
+      assert.equal(directB1.nextOffset, 100);
+      assert.equal(directB1.deals[0].topRank, 1);
+
+      // Batch 1 via engine (starts at 0, stops early at 200 deals = 4 pages = endOffset 200)
+      const b1 = await refreshSteamDeals({ advance: false, config: {}, fetchFn: mockFetch });
+      assert.equal(b1.length, 200);
+      assert.equal(b1[0].id, '10000');
+      assert.equal(store[STORAGE_KEYS.STEAM_DEALS_META].startOffset, 0);
+      assert.equal(store[STORAGE_KEYS.STEAM_DEALS_META].nextOffset, 200);
+
+      // Batch 2 via Refresh button (advance: true -> starts at 200, non-overlapping games!)
+      const b2 = await refreshSteamDeals({ advance: true, config: {}, fetchFn: mockFetch });
+      assert.equal(b2.length, 200);
+      assert.equal(b2[0].id, '10200');
+      assert.equal(store[STORAGE_KEYS.STEAM_DEALS_META].startOffset, 200);
+      assert.equal(store[STORAGE_KEYS.STEAM_DEALS_META].nextOffset, 400);
+
+      // Simulate cursor right at tail (1000) -> next advance finds 0 games at 1000 and wraps back to 0!
+      store[STORAGE_KEYS.STEAM_DEALS_META].nextOffset = 1000;
+      const wrapped = await refreshSteamDeals({ advance: true, config: {}, fetchFn: mockFetch });
+      assert.equal(wrapped[0].id, '10000');
+      assert.equal(store[STORAGE_KEYS.STEAM_DEALS_META].startOffset, 0);
+    } finally {
+      delete globalThis.chrome;
+    }
   });
 });

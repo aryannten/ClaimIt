@@ -11,6 +11,7 @@ import {
   computeValueSaved,
   getAccountStates,
   getSteamDeals,
+  getSteamDealsMeta,
   clampSteamMinDiscount,
   normalizeSteamDealsSort
 } from '../storage.js';
@@ -45,7 +46,8 @@ const RELEVANT_STORAGE_KEYS = new Set([
   STORAGE_KEYS.REGION,
   STORAGE_KEYS.FX_RATES,
   STORAGE_KEYS.ACCOUNTS,
-  STORAGE_KEYS.STEAM_DEALS
+  STORAGE_KEYS.STEAM_DEALS,
+  STORAGE_KEYS.STEAM_DEALS_META
 ]);
 
 const COVER_FALLBACK = '../../assets/cover-fallback.svg';
@@ -82,6 +84,7 @@ let renderInFlight = false;
 let renderQueued = false;
 let lastIpcError = null;
 let latestSteamDeals = [];
+let latestSteamDealsMeta = null;
 let latestPriceContext = null;
 let latestSteamEnabled = true;
 let latestMinDiscount = 75;
@@ -90,6 +93,7 @@ let dealsSearchQuery = '';
 let latestRemoteSearch = null;
 let dealsSearchLoading = false;
 let dealsRefreshing = false;
+let dealsRefreshingAdvance = false;
 let dealsSearchTimer = null;
 let dealsSearchRequestSeq = 0;
 let autoLoadedDealsOnce = false;
@@ -631,6 +635,7 @@ function mergeDealsById(primary, secondary) {
 
 async function renderDealsList({
   allDeals,
+  dealsMeta,
   minDiscount,
   sortBy,
   searchQuery,
@@ -678,6 +683,8 @@ async function renderDealsList({
   if (els.dealsHint) {
     if (searchLoading && cleanQuery.length >= 2) {
       els.dealsHint.textContent = `Searching Steam catalog for "${cleanQuery}"...`;
+    } else if (dealsRefreshing && dealsRefreshingAdvance) {
+      els.dealsHint.textContent = `Loading next batch of Steam ${threshold}%+ deals...`;
     } else if (dealsRefreshing) {
       els.dealsHint.textContent = `Scanning up to 500 Steam Top Sellers for ${threshold}%+ deals...`;
     } else if (hasRemoteMatch) {
@@ -686,6 +693,10 @@ async function renderDealsList({
       els.dealsHint.textContent = `Filtering cached top deals for "${cleanQuery}" (type 2+ chars for full Steam search).`;
     } else if (cleanQuery.length >= 2) {
       els.dealsHint.textContent = `Showing cached matches for "${cleanQuery}"...`;
+    } else if (dealsMeta && dealsMeta.endOffset > dealsMeta.startOffset) {
+      const rangeLabel = `#${dealsMeta.startOffset + 1}-${dealsMeta.endOffset}`;
+      const totalLabel = Number.isFinite(dealsMeta.totalCount) ? ` of ${dealsMeta.totalCount.toLocaleString()}` : '';
+      els.dealsHint.textContent = `Steam specials ${rangeLabel}${totalLabel} (${filtered.length} deals). Press Refresh for another batch.`;
     } else {
       els.dealsHint.textContent = 'Top Steam sales (40-99%) open on Steam and are never auto-bought.';
     }
@@ -747,6 +758,7 @@ function renderCurrentDeals() {
   if (!latestPriceContext) return Promise.resolve();
   return renderDealsList({
     allDeals: latestSteamDeals,
+    dealsMeta: latestSteamDealsMeta,
     minDiscount: latestMinDiscount,
     sortBy: latestDealsSort,
     searchQuery: dealsSearchQuery,
@@ -757,12 +769,13 @@ function renderCurrentDeals() {
   });
 }
 
-async function refreshTopSteamDeals() {
+async function refreshTopSteamDeals({ advance = false } = {}) {
   dealsRefreshing = true;
+  dealsRefreshingAdvance = Boolean(advance);
   if (els.refreshDealsBtn) els.refreshDealsBtn.disabled = true;
   await renderCurrentDeals();
   try {
-    await sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
+    await sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS', advance: Boolean(advance) });
     if (dealsSearchQuery.trim().length >= 2) {
       await runLiveSteamSearch(dealsSearchQuery.trim());
     } else {
@@ -770,6 +783,7 @@ async function refreshTopSteamDeals() {
     }
   } finally {
     dealsRefreshing = false;
+    dealsRefreshingAdvance = false;
     if (els.refreshDealsBtn) els.refreshDealsBtn.disabled = false;
     await renderCurrentDeals();
   }
@@ -803,7 +817,7 @@ async function runLiveSteamSearch(rawQuery) {
 }
 
 async function render() {
-  const [settings, historyMap, currentOffers, meta, storedRegion, cachedFx, alarm, logs, accounts, steamDeals] = await Promise.all([
+  const [settings, historyMap, currentOffers, meta, storedRegion, cachedFx, alarm, logs, accounts, steamDeals, steamDealsMeta] = await Promise.all([
     getSettings(),
     getHistory(),
     getCurrentOffers(),
@@ -813,10 +827,12 @@ async function render() {
     chrome.alarms?.get ? chrome.alarms.get('claimit_check_alarm').catch(() => null) : Promise.resolve(null),
     logger.getAll().catch(() => []),
     getAccountStates(),
-    getSteamDeals()
+    getSteamDeals(),
+    getSteamDealsMeta()
   ]);
   renderAccountsBar(accounts);
   latestSteamDeals = steamDeals;
+  latestSteamDealsMeta = steamDealsMeta;
 
   const region = resolveRegionAndCurrency({ settings, storedRegion });
   const allHistory = Object.values(historyMap);
@@ -1160,7 +1176,7 @@ els.clearDealsSearchBtn?.addEventListener('click', () => {
   els.dealsSearchInput.focus();
 });
 
-els.refreshDealsBtn?.addEventListener('click', refreshTopSteamDeals);
+els.refreshDealsBtn?.addEventListener('click', () => refreshTopSteamDeals({ advance: true }));
 
 els.openOptionsBtn.addEventListener('click', () => {
   chrome.runtime.openOptionsPage();

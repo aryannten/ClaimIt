@@ -7,7 +7,7 @@
 import { classifyOffers } from './classifier.js';
 import { getSelectorsConfig } from './remote-config.js';
 import { getEnabledProviders, getProvider } from './providers/index.js';
-import { fetchSteamDeals } from './providers/steam.js';
+import { fetchSteamDeals, fetchSteamDealsWithMeta } from './providers/steam.js';
 import { CLAIM_STATUS, humanDelay } from './providers/constants.js';
 import {
   getSettings,
@@ -26,6 +26,7 @@ import {
   setCachedFxRates,
   saveAccountState,
   setSteamDeals,
+  getSteamDealsMeta,
   clampSteamMinDiscount
 } from './storage.js';
 import {
@@ -414,24 +415,46 @@ async function runCheckCycleInternal(options = {}) {
 
     // Fetch paid Steam discounted specials matching the active slider % (never auto-claimed)
     const latestForDeals = await loadSettings();
-    const fetchDealsFn = deps.fetchSteamDeals || fetchSteamDeals;
     const targetDiscount = clampSteamMinDiscount(latestForDeals.steamMinDiscount);
     if (latestForDeals.stores?.steam?.enabled && targetDiscount < 100) {
       try {
-        const steamDeals = await fetchDealsFn({
-          config,
-          region,
-          minDiscount: targetDiscount,
-          sortBy: latestForDeals.steamDealsSort || 'popular'
-        });
-        await setSteamDeals(steamDeals);
+        if (deps.fetchSteamDeals) {
+          const steamDeals = await deps.fetchSteamDeals({
+            config,
+            region,
+            minDiscount: targetDiscount,
+            sortBy: latestForDeals.steamDealsSort || 'popular'
+          });
+          await setSteamDeals(steamDeals);
+        } else {
+          const batch = await fetchSteamDealsWithMeta({
+            config,
+            region,
+            minDiscount: targetDiscount,
+            sortBy: latestForDeals.steamDealsSort || 'popular',
+            startOffset: 0
+          });
+          await setSteamDeals(batch.deals, {
+            startOffset: batch.startOffset,
+            endOffset: batch.endOffset,
+            nextOffset: batch.nextOffset,
+            totalCount: batch.totalCount,
+            minDiscount: targetDiscount
+          });
+        }
       } catch (err) {
         await logger.warn('engine', 'Failed to refresh Steam discount deals', {
           error: err instanceof Error ? err.message : String(err)
         });
       }
     } else if (targetDiscount >= 100) {
-      await setSteamDeals([]);
+      await setSteamDeals([], {
+        startOffset: 0,
+        endOffset: 0,
+        nextOffset: 0,
+        totalCount: null,
+        minDiscount: targetDiscount
+      });
     }
     const metaBefore = await loadMetaFn();
     const shouldReschedule =
@@ -529,28 +552,70 @@ export async function claimSingleOffer(storeId, offerId) {
 }
 
 /**
- * Refresh Steam's paid discount deals list on demand (e.g. when user lowers the % threshold).
+ * Refresh Steam's paid discount deals list on demand.
+ * Pass `{ advance: true }` from the Deals Refresh button to step to the next batch of Steam rows
+ * so different games appear, wrapping cleanly back to offset 0 when reaching the end.
+ * @param {{ advance?: boolean, fetchFn?: typeof fetch }} [options]
  */
-export async function refreshSteamDeals() {
-  const [settings, storedRegion, { config }] = await Promise.all([
+export async function refreshSteamDeals(options = {}) {
+  const [settings, storedRegion, { config }, prevMeta] = await Promise.all([
     getSettings(),
     getRegionState(),
-    getSelectorsConfig()
+    options?.config ? Promise.resolve({ config: options.config }) : getSelectorsConfig(),
+    options?.advance ? getSteamDealsMeta() : Promise.resolve(null)
   ]);
   const targetDiscount = clampSteamMinDiscount(settings.steamMinDiscount);
   if (!settings.stores?.steam?.enabled || targetDiscount >= 100) {
-    await setSteamDeals([]);
+    await setSteamDeals([], {
+      startOffset: 0,
+      endOffset: 0,
+      nextOffset: 0,
+      totalCount: null,
+      minDiscount: targetDiscount
+    });
     return [];
   }
+
   const region = resolveRegionAndCurrency({ settings, storedRegion });
-  const deals = await fetchSteamDeals({
+  const sortBy = settings.steamDealsSort || 'popular';
+  const startOffset =
+    options?.advance &&
+    prevMeta &&
+    prevMeta.minDiscount === targetDiscount &&
+    Number.isFinite(prevMeta.nextOffset) &&
+    prevMeta.nextOffset > 0
+      ? prevMeta.nextOffset
+      : 0;
+
+  let batch = await fetchSteamDealsWithMeta({
     config,
     region,
     minDiscount: targetDiscount,
-    sortBy: settings.steamDealsSort || 'popular'
+    sortBy,
+    startOffset,
+    fetchFn: options?.fetchFn
   });
-  await setSteamDeals(deals);
-  return deals;
+
+  // Wrap cleanly back to batch 1 if an advanced slice contained no qualifying deals at this %.
+  if (startOffset > 0 && batch.deals.length === 0) {
+    batch = await fetchSteamDealsWithMeta({
+      config,
+      region,
+      minDiscount: targetDiscount,
+      sortBy,
+      startOffset: 0,
+      fetchFn: options?.fetchFn
+    });
+  }
+
+  await setSteamDeals(batch.deals, {
+    startOffset: batch.startOffset,
+    endOffset: batch.endOffset,
+    nextOffset: batch.nextOffset,
+    totalCount: batch.totalCount,
+    minDiscount: targetDiscount
+  });
+  return batch.deals;
 }
 
 /**
