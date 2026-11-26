@@ -35,6 +35,7 @@ import { notifyOfferOutcome } from './notifications.js';
 import { logger } from './logger.js';
 
 export const CLAIM_TIMEOUT_MS = 60_000;
+export const MAX_CLAIMS_PER_CYCLE = 20;
 
 let activeCyclePromise = null;
 let activeCycleAbortController = null;
@@ -257,7 +258,8 @@ async function runCheckCycleInternal(options = {}) {
         }
       }
 
-      const { eligible, excluded } = classifyOffers(rawOffers);
+      const cycleNowMs = typeof deps.nowMs === 'function' ? deps.nowMs() : Date.now();
+      const { eligible, excluded } = classifyOffers(rawOffers, cycleNowMs);
       await logger.info('engine', `Provider ${provider.id} fetched offers`, {
         total: rawOffers.length,
         eligible: eligible.length,
@@ -329,6 +331,13 @@ async function runCheckCycleInternal(options = {}) {
             settings: latestSettings
           });
           snapshotOffers.push(buildOfferSnapshot(offer, CLAIM_STATUS.NEEDS_USER, reason));
+          continue;
+        }
+
+        if (claimsAttempted >= MAX_CLAIMS_PER_CYCLE) {
+          const capReason = `Skipped auto-claim after reaching per-cycle safety limit (${MAX_CLAIMS_PER_CYCLE})`;
+          await logger.warn('engine', capReason, { key });
+          snapshotOffers.push(buildOfferSnapshot(offer, CLAIM_STATUS.NEEDS_USER, capReason));
           continue;
         }
 

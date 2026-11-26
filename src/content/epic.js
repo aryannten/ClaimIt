@@ -132,7 +132,7 @@
       loginRequired,
       hasGetButton,
       hasCheckoutContainer,
-      ctaText: getBtn ? normText(getBtn) : null
+      ctaText: getBtn ? normText(getBtn).slice(0, 200) : null
     };
   }
 
@@ -252,7 +252,8 @@
     return { clicked: true };
   }
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (sender?.id && sender.id !== chrome.runtime.id) return false;
     try {
       switch (message?.action) {
         case 'EPIC_INSPECT_PRODUCT':

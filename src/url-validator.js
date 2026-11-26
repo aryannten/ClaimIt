@@ -1,10 +1,9 @@
 /**
- * URL allowlist guard for chrome.tabs.create and notification click targets.
- * Only HTTPS URLs on known store hostnames are permitted to open in a new tab.
- * This prevents any injected or corrupted offer URL from opening arbitrary pages.
+ * URL allowlist guards for tabs, endpoints, and notification webhooks.
+ * Enforces HTTPS without embedded credentials and strict hostname allowlists.
  */
 
-const ALLOWED_STORE_ORIGINS = new Set([
+const ALLOWED_STORE_HOSTS = new Set([
   'store.epicgames.com',
   'payment-website-pci.ol.epicgames.com',
   'store.steampowered.com',
@@ -12,18 +11,71 @@ const ALLOWED_STORE_ORIGINS = new Set([
   'steamdb.info'
 ]);
 
+const ALLOWED_STORE_ENDPOINT_HOSTS = {
+  epic: new Set([
+    'store-site-backend-static-ipv4.ak.epicgames.com',
+    'store.epicgames.com',
+    'payment-website-pci.ol.epicgames.com'
+  ]),
+  steam: new Set([
+    'store.steampowered.com',
+    'steamdb.info'
+  ])
+};
+
+const ALLOWED_DISCORD_WEBHOOK_HOSTS = new Set([
+  'discord.com',
+  'discordapp.com',
+  'ptb.discord.com',
+  'canary.discord.com'
+]);
+
+function parseSafeHttpsUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('https://')) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Return true only if the URL is HTTPS and its hostname is on the store allowlist.
- * Rejects javascript:, data:, blob:, http:, and unknown hostnames.
+ * Return true only if the URL is HTTPS (without credentials) and its hostname
+ * is on the allowed game-store hostnames list.
  * @param {string|null|undefined} url
  * @returns {boolean}
  */
 export function isAllowedStoreUrl(url) {
-  if (typeof url !== 'string' || !url.startsWith('https://')) return false;
-  try {
-    const { protocol, hostname } = new URL(url);
-    return protocol === 'https:' && ALLOWED_STORE_ORIGINS.has(hostname);
-  } catch {
-    return false;
-  }
+  const parsed = parseSafeHttpsUrl(url);
+  return Boolean(parsed && ALLOWED_STORE_HOSTS.has(parsed.hostname));
+}
+
+/**
+ * Validate a store API/page endpoint from selectors.json against that store's allowed hosts.
+ * @param {string} storeId
+ * @param {string|null|undefined} url
+ * @returns {boolean}
+ */
+export function isAllowedStoreEndpointUrl(storeId, url) {
+  const parsed = parseSafeHttpsUrl(url);
+  const allowed = ALLOWED_STORE_ENDPOINT_HOSTS[storeId];
+  return Boolean(parsed && allowed && allowed.has(parsed.hostname));
+}
+
+/**
+ * Return true only if the URL is a valid HTTPS Discord webhook URL.
+ * @param {string|null|undefined} url
+ * @returns {boolean}
+ */
+export function isAllowedDiscordWebhookUrl(url) {
+  const parsed = parseSafeHttpsUrl(typeof url === 'string' ? url.trim() : url);
+  if (!parsed) return false;
+  return (
+    ALLOWED_DISCORD_WEBHOOK_HOSTS.has(parsed.hostname) &&
+    /^\/api\/webhooks\/\d+\/[A-Za-z0-9._-]+$/i.test(parsed.pathname)
+  );
 }

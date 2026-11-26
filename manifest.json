@@ -30,22 +30,22 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none';"
   },
+  "web_accessible_resources": [],
   "permissions": [
     "alarms",
     "notifications",
     "storage",
     "scripting",
-    "tabs",
-    "windows"
+    "tabs"
   ],
   "host_permissions": [
     "https://store-site-backend-static-ipv4.ak.epicgames.com/*",
     "https://store.epicgames.com/*",
     "https://payment-website-pci.ol.epicgames.com/*",
-    "https://store.steampowered.com/*",
-    "https://raw.githubusercontent.com/*"
+    "https://store.steampowered.com/*"
   ],
   "optional_host_permissions": [
+    "https://raw.githubusercontent.com/*",
     "https://open.er-api.com/*",
     "https://api.telegram.org/*",
     "https://discord.com/*",
