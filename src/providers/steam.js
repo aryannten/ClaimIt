@@ -571,9 +571,10 @@ async function fetchOwnedAppIds(endpoints, context, fetchFn) {
 }
 
 /**
- * Fetch paid discounted Steam deals (paginated up to 250 Top Sellers, or live Steam search).
+ * Fetch paid discounted Steam deals (paginated up to 500 Top Sellers rows until collecting
+ * up to 200 matching deals, or live Steam catalog search).
  * Never auto-claimed; strictly for user browsing in the Deals tab.
- * @param {{ config?: object, region?: { country?: string }|null, minDiscount?: number, query?: string, sortBy?: 'popular'|'reviews'|'discount'|'price', maxPages?: number, steamUserdata?: object, fetchFn?: typeof fetch }} [context]
+ * @param {{ config?: object, region?: { country?: string }|null, minDiscount?: number, query?: string, sortBy?: 'popular'|'reviews'|'discount'|'price', maxPages?: number, targetDeals?: number, steamUserdata?: object, fetchFn?: typeof fetch }} [context]
  * @returns {Promise<object[]>}
  */
 export async function fetchSteamDeals(context = {}) {
@@ -588,8 +589,8 @@ export async function fetchSteamDeals(context = {}) {
   const ownedSet = new Set(Array.isArray(ownedIds) ? ownedIds.map((x) => Number(x)) : []);
 
   const pageSize = 50;
-  const maxPages = Math.max(1, Math.min(8, Number(context.maxPages || (query ? 2 : 5))));
-  const targetDeals = query ? 80 : 150;
+  const maxPages = Math.max(1, Math.min(10, Number(context.maxPages || (query ? 4 : 10))));
+  const targetDeals = Math.max(1, Math.min(250, Number(context.targetDeals || (query ? 100 : 200))));
   const seenIds = new Set();
   const collected = [];
   let eligibleCount = 0;

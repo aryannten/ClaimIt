@@ -89,6 +89,7 @@ let latestDealsSort = 'popular';
 let dealsSearchQuery = '';
 let latestRemoteSearch = null;
 let dealsSearchLoading = false;
+let dealsRefreshing = false;
 let dealsSearchTimer = null;
 let dealsSearchRequestSeq = 0;
 let autoLoadedDealsOnce = false;
@@ -677,6 +678,8 @@ async function renderDealsList({
   if (els.dealsHint) {
     if (searchLoading && cleanQuery.length >= 2) {
       els.dealsHint.textContent = `Searching Steam catalog for "${cleanQuery}"...`;
+    } else if (dealsRefreshing) {
+      els.dealsHint.textContent = `Scanning up to 500 Steam Top Sellers for ${threshold}%+ deals...`;
     } else if (hasRemoteMatch) {
       els.dealsHint.textContent = `Live Steam search for "${cleanQuery}" (${filtered.length} discounted ${filtered.length === 1 ? 'deal' : 'deals'}).`;
     } else if (cleanQuery.length === 1) {
@@ -705,7 +708,7 @@ async function renderDealsList({
     });
     return;
   }
-  if (searchLoading && filtered.length === 0) {
+  if ((searchLoading || dealsRefreshing) && filtered.length === 0) {
     renderLoadingSkeleton(els.dealsListContainer);
     return;
   }
@@ -715,10 +718,7 @@ async function renderDealsList({
       title: 'No Steam deals loaded yet',
       desc: 'Load current top Steam store discounts at your chosen minimum percentage.',
       actionLabel: 'Load deals',
-      onAction: async () => {
-        await sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
-        await scheduleRender();
-      }
+      onAction: () => refreshTopSteamDeals()
     });
     return;
   }
@@ -755,6 +755,24 @@ function renderCurrentDeals() {
     priceContext: latestPriceContext,
     steamEnabled: latestSteamEnabled
   });
+}
+
+async function refreshTopSteamDeals() {
+  dealsRefreshing = true;
+  if (els.refreshDealsBtn) els.refreshDealsBtn.disabled = true;
+  await renderCurrentDeals();
+  try {
+    await sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
+    if (dealsSearchQuery.trim().length >= 2) {
+      await runLiveSteamSearch(dealsSearchQuery.trim());
+    } else {
+      await scheduleRender();
+    }
+  } finally {
+    dealsRefreshing = false;
+    if (els.refreshDealsBtn) els.refreshDealsBtn.disabled = false;
+    await renderCurrentDeals();
+  }
 }
 
 async function runLiveSteamSearch(rawQuery) {
@@ -1070,9 +1088,7 @@ els.dealsDiscountSlider?.addEventListener('change', async () => {
   const val = clampSteamMinDiscount(els.dealsDiscountSlider.value);
   latestMinDiscount = val;
   await saveSettings({ steamMinDiscount: val });
-  if (val < 100 && latestSteamDeals.length === 0) {
-    await sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
-  }
+  await refreshTopSteamDeals();
 });
 
 els.dealsSortSelect?.addEventListener('change', async () => {
@@ -1144,19 +1160,7 @@ els.clearDealsSearchBtn?.addEventListener('click', () => {
   els.dealsSearchInput.focus();
 });
 
-els.refreshDealsBtn?.addEventListener('click', async () => {
-  els.refreshDealsBtn.disabled = true;
-  try {
-    await sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
-    if (dealsSearchQuery.trim().length >= 2) {
-      await runLiveSteamSearch(dealsSearchQuery.trim());
-    } else {
-      await scheduleRender();
-    }
-  } finally {
-    els.refreshDealsBtn.disabled = false;
-  }
-});
+els.refreshDealsBtn?.addEventListener('click', refreshTopSteamDeals);
 
 els.openOptionsBtn.addEventListener('click', () => {
   chrome.runtime.openOptionsPage();

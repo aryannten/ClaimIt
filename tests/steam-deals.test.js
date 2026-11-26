@@ -281,4 +281,66 @@ describe('Steam discount deals filter & slider range', () => {
     assert.equal(parsedSearchUrl.searchParams.get('specials'), null);
     assert.equal(searchDeals[0].id, '2807960');
   });
+
+  it('fetchSteamDeals scans up to 10 pages (500 rows) to satisfy higher slider % or stops early at 200 matches', async () => {
+    const makeMixedPage = (page) =>
+      Array.from({ length: 50 }, (_, idx) => {
+        const id = page * 100 + idx + 1;
+        // 15 deals >= 80% per page, rest 50% off -> needs all 10 pages to collect 150 deals >= 80%
+        const pct = idx < 15 ? 85 : 50;
+        return `
+          <a href="https://store.steampowered.com/app/${id}/Game_${id}/" data-ds-appid="${id}" class="search_result_row">
+            <span class="title">Game ${id}</span>
+            <div class="discount_block" data-price-final="299" data-discount="${pct}">
+              <div class="discount_original_price">₹1,999.00</div>
+              <div class="discount_final_price">₹299.00</div>
+            </div>
+          </a>
+        `;
+      }).join('');
+
+    let pageFetches = 0;
+    const highThresholdDeals = await fetchSteamDeals({
+      minDiscount: 80,
+      steamUserdata: { rgOwnedApps: [] },
+      fetchFn: async (href) => {
+        pageFetches += 1;
+        const start = Number(new URL(href).searchParams.get('start') || 0);
+        return new Response(
+          JSON.stringify({
+            success: 1,
+            total_count: 1000,
+            results_html: makeMixedPage(Math.floor(start / 50))
+          }),
+          { status: 200 }
+        );
+      }
+    });
+
+    assert.equal(pageFetches, 10);
+    assert.equal(highThresholdDeals.length, 150);
+    assert.ok(highThresholdDeals.every((d) => d.discountPercent >= 80));
+
+    // At 40% slider, every 50 rows has 50 matches -> stops cleanly at page 4 (200 deals)
+    let lowFetches = 0;
+    const earlyStopDeals = await fetchSteamDeals({
+      minDiscount: 40,
+      steamUserdata: { rgOwnedApps: [] },
+      fetchFn: async (href) => {
+        lowFetches += 1;
+        const start = Number(new URL(href).searchParams.get('start') || 0);
+        return new Response(
+          JSON.stringify({
+            success: 1,
+            total_count: 1000,
+            results_html: makeMixedPage(Math.floor(start / 50))
+          }),
+          { status: 200 }
+        );
+      }
+    });
+
+    assert.equal(lowFetches, 4);
+    assert.equal(earlyStopDeals.length, 200);
+  });
 });
