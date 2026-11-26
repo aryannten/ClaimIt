@@ -92,7 +92,7 @@
     "steam": {
       "endpoints": {
         "searchResults": "https://store.steampowered.com/search/results/?query=&maxprice=free&specials=1&infinite=1&json=1",
-        "dealsSearch": "https://store.steampowered.com/search/results/?query=&specials=1&category1=998&count=50&infinite=1&json=1",
+        "dealsSearch": "https://store.steampowered.com/search/results/?query=&specials=1&category1=998&filter=topsellers&count=50&infinite=1&json=1",
         "userdata": "https://store.steampowered.com/dynamicstore/userdata/",
         "appBase": "https://store.steampowered.com/app/",
         "steamdbFree": "https://steamdb.info/upcoming/free/"

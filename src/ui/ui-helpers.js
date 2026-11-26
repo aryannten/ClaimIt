@@ -127,3 +127,26 @@ export function formatRoughNextScan(isoOrMs, nowMs = Date.now(), locale) {
     return formatLocalDateTime(new Date(ts).toISOString(), locale);
   }
 }
+
+/**
+ * Format large counts cleanly in compact notation (e.g. 325333 -> "325.3K").
+ * @param {number|null|undefined} value
+ * @param {string} [locale]
+ * @returns {string}
+ */
+export function formatCompactCount(value, locale) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 0) return '';
+  if (num < 1000) return String(Math.round(num));
+  try {
+    return new Intl.NumberFormat(locale || undefined, {
+      notation: 'compact',
+      maximumFractionDigits: 1
+    }).format(num);
+  } catch {
+    if (num >= 1_000_000) {
+      return `${(num / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+    }
+    return `${(num / 1000).toFixed(1).replace(/\.0$/, '')}K`;
+  }
+}

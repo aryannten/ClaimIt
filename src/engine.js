@@ -539,7 +539,33 @@ export async function refreshSteamDeals() {
     return [];
   }
   const region = resolveRegionAndCurrency({ settings, storedRegion });
-  const deals = await fetchSteamDeals({ config, region, minDiscount: 40 });
+  const deals = await fetchSteamDeals({ config, region, minDiscount: 40, sortBy: 'popular' });
   await setSteamDeals(deals);
   return deals;
+}
+
+/**
+ * Search Steam's full game catalog for discounted titles matching `query` without altering cached deals.
+ * @param {string} query
+ * @param {{ sortBy?: string }} [options]
+ */
+export async function searchSteamDeals(query, options = {}) {
+  const cleanQuery = typeof query === 'string' ? query.trim().slice(0, 80) : '';
+  const [settings, storedRegion, { config }] = await Promise.all([
+    getSettings(),
+    getRegionState(),
+    getSelectorsConfig()
+  ]);
+  if (!settings.stores?.steam?.enabled || !cleanQuery || cleanQuery.length < 2) {
+    return { query: cleanQuery, deals: [] };
+  }
+  const region = resolveRegionAndCurrency({ settings, storedRegion });
+  const deals = await fetchSteamDeals({
+    config,
+    region,
+    minDiscount: 40,
+    query: cleanQuery,
+    sortBy: options.sortBy || settings.steamDealsSort || 'popular'
+  });
+  return { query: cleanQuery, deals };
 }

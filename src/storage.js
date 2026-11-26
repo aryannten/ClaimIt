@@ -30,11 +30,18 @@ export const STORAGE_KEYS = {
 export const MIN_STEAM_DISCOUNT_LIMIT = 40;
 export const MAX_STEAM_DISCOUNT_LIMIT = 100;
 export const DEFAULT_STEAM_MIN_DISCOUNT = 75;
+export const STEAM_DEALS_SORT_OPTIONS = ['popular', 'reviews', 'discount', 'price'];
+export const DEFAULT_STEAM_DEALS_SORT = 'popular';
+const MAX_STEAM_DEALS = 150;
 
 export function clampSteamMinDiscount(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return DEFAULT_STEAM_MIN_DISCOUNT;
   return Math.min(MAX_STEAM_DISCOUNT_LIMIT, Math.max(MIN_STEAM_DISCOUNT_LIMIT, Math.round(num)));
+}
+
+export function normalizeSteamDealsSort(value) {
+  return STEAM_DEALS_SORT_OPTIONS.includes(value) ? value : DEFAULT_STEAM_DEALS_SORT;
 }
 
 const CYCLE_LOCK_TTL_MS = 5 * 60 * 1000;
@@ -49,6 +56,7 @@ const DEFAULT_SETTINGS = {
   dryRun: false,
   currency: 'auto',
   steamMinDiscount: DEFAULT_STEAM_MIN_DISCOUNT,
+  steamDealsSort: DEFAULT_STEAM_DEALS_SORT,
   remoteConfigUrl: '',
   stores: {
     epic: { enabled: true, mode: 'auto' },
@@ -88,6 +96,10 @@ function mergeSettings(raw = {}) {
       raw.steamMinDiscount === undefined
         ? DEFAULT_SETTINGS.steamMinDiscount
         : clampSteamMinDiscount(raw.steamMinDiscount),
+    steamDealsSort:
+      raw.steamDealsSort === undefined
+        ? DEFAULT_SETTINGS.steamDealsSort
+        : normalizeSteamDealsSort(raw.steamDealsSort),
     remoteConfigUrl: typeof raw.remoteConfigUrl === 'string' ? raw.remoteConfigUrl : DEFAULT_SETTINGS.remoteConfigUrl,
     stores: mergedStores,
     notifications: {
@@ -574,6 +586,6 @@ export async function getSteamDeals() {
 
 export async function setSteamDeals(deals) {
   if (!hasChromeStorage()) return;
-  const clean = Array.isArray(deals) ? deals.slice(0, 50) : [];
+  const clean = Array.isArray(deals) ? deals.slice(0, MAX_STEAM_DEALS) : [];
   await chrome.storage.local.set({ [STORAGE_KEYS.STEAM_DEALS]: clean });
 }

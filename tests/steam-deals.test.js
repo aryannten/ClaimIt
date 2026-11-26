@@ -11,7 +11,13 @@ import {
   fetchSteamDeals
 } from '../src/providers/steam.js';
 import { classifyOffers } from '../src/classifier.js';
-import { clampSteamMinDiscount, DEFAULT_STEAM_MIN_DISCOUNT } from '../src/storage.js';
+import {
+  clampSteamMinDiscount,
+  DEFAULT_STEAM_MIN_DISCOUNT,
+  normalizeSteamDealsSort,
+  DEFAULT_STEAM_DEALS_SORT
+} from '../src/storage.js';
+import { formatCompactCount } from '../src/ui/ui-helpers.js';
 
 describe('Steam discount deals filter & slider range', () => {
   it('clamps steamMinDiscount strictly between 40 and 100', () => {
@@ -138,5 +144,141 @@ describe('Steam discount deals filter & slider range', () => {
     assert.equal(deals.length, 1);
     assert.equal(deals[0].id, '300');
     assert.equal(deals[0].discountPercent, 80);
+  });
+
+  it('parses Steam review stats and supports popularity/review/price sorting + query filter', () => {
+    const html = `
+      <a href="https://store.steampowered.com/app/1238840/Battlefield_1/" data-ds-appid="1238840" class="search_result_row">
+        <span class="title">Battlefield™ 1</span>
+        <span class="search_review_summary positive" data-tooltip-html="Very Positive&lt;br&gt;86% of the 47,523 user reviews for this game are positive."></span>
+        <div class="discount_block" data-price-final="12400" data-discount="95">
+          <div class="discount_original_price">₹2,499.00</div>
+          <div class="discount_final_price">₹124.00</div>
+        </div>
+      </a>
+      <a href="https://store.steampowered.com/app/2807960/Battlefield_6/" data-ds-appid="2807960" class="search_result_row">
+        <span class="title">Battlefield™ 6</span>
+        <span class="search_review_summary mixed" data-tooltip-html="Mixed&lt;br&gt;68% of the 12,400 user reviews for this game are positive."></span>
+        <div class="discount_block" data-price-final="131900" data-discount="67">
+          <div class="discount_original_price">₹3,999.00</div>
+          <div class="discount_final_price">₹1,319.00</div>
+        </div>
+      </a>
+      <a href="https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/" data-ds-appid="1174180" class="search_result_row">
+        <span class="title">Red Dead Redemption 2</span>
+        <span class="search_review_summary positive" data-tooltip-html="Very Positive&lt;br&gt;92% of the 325,333 user reviews for this game are positive."></span>
+        <div class="discount_block" data-price-final="124900" data-discount="75">
+          <div class="discount_original_price">₹4,999.00</div>
+          <div class="discount_final_price">₹1,249.00</div>
+        </div>
+      </a>
+    `;
+
+    const parsed = parseSteamSearchHtml(html, {}, { country: 'IN' }).map((o, idx) => ({
+      ...o,
+      topRank: idx === 2 ? 1 : idx + 2
+    }));
+
+    assert.equal(parsed[0].reviewSummary, 'Very Positive');
+    assert.equal(parsed[0].reviewSentiment, 'positive');
+    assert.equal(parsed[0].reviewPercent, 86);
+    assert.equal(parsed[0].reviewCount, 47523);
+    assert.equal(parsed[1].reviewSentiment, 'mixed');
+    assert.equal(parsed[1].reviewCount, 12400);
+
+    // Popularity sort honors topRank ascending
+    const byPopular = filterSteamDiscountDeals(parsed, 40, null, { sortBy: 'popular' });
+    assert.deepEqual(byPopular.map((d) => d.id), ['1174180', '1238840', '2807960']);
+
+    // Reviews sort orders by total review count descending
+    const byReviews = filterSteamDiscountDeals(parsed, 40, null, { sortBy: 'reviews' });
+    assert.deepEqual(byReviews.map((d) => d.id), ['1174180', '1238840', '2807960']);
+
+    // Lowest price sort orders by final sale price ascending
+    const byPrice = filterSteamDiscountDeals(parsed, 40, null, { sortBy: 'price' });
+    assert.deepEqual(byPrice.map((d) => d.id), ['1238840', '1174180', '2807960']);
+
+    // Query filter finds multi-token Battlefield 6 cleanly
+    const bf6 = filterSteamDiscountDeals(parsed, 40, null, { query: 'battlefield 6' });
+    assert.deepEqual(bf6.map((d) => d.id), ['2807960']);
+
+    assert.equal(normalizeSteamDealsSort('unknown'), DEFAULT_STEAM_DEALS_SORT);
+    assert.equal(normalizeSteamDealsSort('reviews'), 'reviews');
+    assert.equal(formatCompactCount(850, 'en-US'), '850');
+    assert.match(formatCompactCount(325333, 'en-US'), /^325/);
+  });
+
+  it('fetchSteamDeals paginates Top Sellers past 50 rows and searches catalog without specials=1', async () => {
+    const makeRows = (startId, count) =>
+      Array.from({ length: count }, (_, idx) => {
+        const id = startId + idx;
+        return `
+          <a href="https://store.steampowered.com/app/${id}/Game_${id}/" data-ds-appid="${id}" class="search_result_row">
+            <span class="title">Game ${id}</span>
+            <div class="discount_block" data-price-final="499" data-discount="75">
+              <div class="discount_original_price">₹1,999.00</div>
+              <div class="discount_final_price">₹499.00</div>
+            </div>
+          </a>
+        `;
+      }).join('');
+
+    const browseUrls = [];
+    const pagedDeals = await fetchSteamDeals({
+      minDiscount: 40,
+      maxPages: 3,
+      steamUserdata: { rgOwnedApps: [] },
+      fetchFn: async (href) => {
+        browseUrls.push(href);
+        const start = Number(new URL(href).searchParams.get('start') || 0);
+        return new Response(
+          JSON.stringify({
+            success: 1,
+            total_count: 120,
+            results_html: start === 0 ? makeRows(1000, 50) : makeRows(2000, 30)
+          }),
+          { status: 200 }
+        );
+      }
+    });
+
+    assert.equal(browseUrls.length, 2);
+    assert.ok(browseUrls[0].includes('filter=topsellers'));
+    assert.ok(browseUrls[1].includes('start=50'));
+    assert.equal(pagedDeals.length, 80);
+    assert.equal(pagedDeals[0].topRank, 1);
+    assert.equal(pagedDeals[50].topRank, 51);
+
+    const searchUrls = [];
+    const searchDeals = await fetchSteamDeals({
+      minDiscount: 40,
+      query: 'Battlefield',
+      steamUserdata: { rgOwnedApps: [] },
+      fetchFn: async (href) => {
+        searchUrls.push(href);
+        return new Response(
+          JSON.stringify({
+            success: 1,
+            total_count: 1,
+            results_html: `
+              <a href="https://store.steampowered.com/app/2807960/Battlefield_6/" data-ds-appid="2807960" class="search_result_row">
+                <span class="title">Battlefield™ 6</span>
+                <div class="discount_block" data-price-final="131900" data-discount="67">
+                  <div class="discount_original_price">₹3,999.00</div>
+                  <div class="discount_final_price">₹1,319.00</div>
+                </div>
+              </a>
+            `
+          }),
+          { status: 200 }
+        );
+      }
+    });
+
+    assert.equal(searchUrls.length, 1);
+    const parsedSearchUrl = new URL(searchUrls[0]);
+    assert.equal(parsedSearchUrl.searchParams.get('term'), 'Battlefield');
+    assert.equal(parsedSearchUrl.searchParams.get('specials'), null);
+    assert.equal(searchDeals[0].id, '2807960');
   });
 });

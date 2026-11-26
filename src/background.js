@@ -5,7 +5,7 @@
  * Runs exclusively via Chrome events with no background timers or idle state.
  */
 
-import { runCheckCycle, claimSingleOffer, abortActiveAutomation, refreshSteamDeals } from './engine.js';
+import { runCheckCycle, claimSingleOffer, abortActiveAutomation, refreshSteamDeals, searchSteamDeals } from './engine.js';
 import { getSettings, saveSettings, clearHistory, getMeta, updateMeta } from './storage.js';
 import {
   CHECK_ALARM_NAME,
@@ -133,6 +133,12 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
 
         case 'CLAIMIT_REFRESH_STEAM_DEALS':
           return refreshSteamDeals();
+
+        case 'CLAIMIT_SEARCH_STEAM_DEALS':
+          if (typeof message.query !== 'string' || message.query.length > 80) {
+            throw new Error('Invalid search query');
+          }
+          return searchSteamDeals(message.query, { sortBy: message.sortBy });
 
         case 'CLAIMIT_CLAIM_ONE':
           if (
