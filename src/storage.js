@@ -32,7 +32,7 @@ export const MAX_STEAM_DISCOUNT_LIMIT = 100;
 export const DEFAULT_STEAM_MIN_DISCOUNT = 75;
 export const STEAM_DEALS_SORT_OPTIONS = ['popular', 'reviews', 'discount', 'price'];
 export const DEFAULT_STEAM_DEALS_SORT = 'popular';
-const MAX_STEAM_DEALS = 150;
+const MAX_STEAM_DEALS = 200;
 
 export function clampSteamMinDiscount(value) {
   const num = Number(value);

@@ -25,7 +25,8 @@ import {
   getCachedFxRates,
   setCachedFxRates,
   saveAccountState,
-  setSteamDeals
+  setSteamDeals,
+  clampSteamMinDiscount
 } from './storage.js';
 import {
   resolveRegionAndCurrency,
@@ -411,15 +412,17 @@ async function runCheckCycleInternal(options = {}) {
     const finishedIso = new Date(finishedMs).toISOString();
     await saveCurrentOffersFn(snapshotOffers);
 
-    // Fetch paid Steam discounted specials (40-99%) strictly for user browsing (never auto-claimed)
+    // Fetch paid Steam discounted specials matching the active slider % (never auto-claimed)
     const latestForDeals = await loadSettings();
     const fetchDealsFn = deps.fetchSteamDeals || fetchSteamDeals;
-    if (latestForDeals.stores?.steam?.enabled && Number(latestForDeals.steamMinDiscount) < 100) {
+    const targetDiscount = clampSteamMinDiscount(latestForDeals.steamMinDiscount);
+    if (latestForDeals.stores?.steam?.enabled && targetDiscount < 100) {
       try {
         const steamDeals = await fetchDealsFn({
           config,
           region,
-          minDiscount: 40
+          minDiscount: targetDiscount,
+          sortBy: latestForDeals.steamDealsSort || 'popular'
         });
         await setSteamDeals(steamDeals);
       } catch (err) {
@@ -427,7 +430,7 @@ async function runCheckCycleInternal(options = {}) {
           error: err instanceof Error ? err.message : String(err)
         });
       }
-    } else if (Number(latestForDeals.steamMinDiscount) >= 100) {
+    } else if (targetDiscount >= 100) {
       await setSteamDeals([]);
     }
     const metaBefore = await loadMetaFn();
@@ -534,12 +537,18 @@ export async function refreshSteamDeals() {
     getRegionState(),
     getSelectorsConfig()
   ]);
-  if (!settings.stores?.steam?.enabled || Number(settings.steamMinDiscount) >= 100) {
+  const targetDiscount = clampSteamMinDiscount(settings.steamMinDiscount);
+  if (!settings.stores?.steam?.enabled || targetDiscount >= 100) {
     await setSteamDeals([]);
     return [];
   }
   const region = resolveRegionAndCurrency({ settings, storedRegion });
-  const deals = await fetchSteamDeals({ config, region, minDiscount: 40, sortBy: 'popular' });
+  const deals = await fetchSteamDeals({
+    config,
+    region,
+    minDiscount: targetDiscount,
+    sortBy: settings.steamDealsSort || 'popular'
+  });
   await setSteamDeals(deals);
   return deals;
 }
