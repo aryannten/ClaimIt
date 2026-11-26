@@ -19,7 +19,8 @@ import {
   sendTestWebhook
 } from './notifications.js';
 import { focusTab } from './providers/tab-helpers.js';
-import { logger } from './logger.js';
+import { logger, redactSecrets } from './logger.js';
+import { isAllowedStoreUrl } from './url-validator.js';
 
 export { CHECK_ALARM_NAME };
 
@@ -51,7 +52,7 @@ async function openOrFocusNotificationTarget(notificationId) {
       // Original tab was closed; open a fresh active tab
     }
   }
-  if (target.offerUrl) {
+  if (target.offerUrl && isAllowedStoreUrl(target.offerUrl)) {
     await chrome.tabs.create({ url: target.offerUrl, active: true });
   }
 }
@@ -93,13 +94,24 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
     await removeNotificationTarget(notificationId);
   });
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Only process messages from this extension's own pages (popup, options).
+    // Reject messages from web pages or content scripts relaying external data.
+    if (sender?.id !== chrome.runtime.id) return false;
     const handle = async () => {
       switch (message?.type) {
         case 'CLAIMIT_RUN_CHECK':
           return runManualCheck();
 
         case 'CLAIMIT_CLAIM_ONE':
+          if (
+            typeof message.store !== 'string' ||
+            typeof message.id !== 'string' ||
+            message.id.length === 0 ||
+            message.id.length > 128
+          ) {
+            throw new Error('Invalid store or offer identifier');
+          }
           return claimSingleOffer(message.store, message.id);
 
         case 'CLAIMIT_SET_PAUSED': {
@@ -121,18 +133,21 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
           return getSelectorsConfig({ forceRefresh: true });
 
         case 'CLAIMIT_TEST_WEBHOOK':
+          if (message.channel !== 'telegram' && message.channel !== 'discord') {
+            throw new Error('Unsupported notification channel');
+          }
           await sendTestWebhook(message.channel, message.config);
           return { ok: true };
 
         default:
-          return { error: `Unknown message type: ${message?.type}` };
+          return { error: `Unknown message type: ${String(message?.type || '')}` };
       }
     };
 
     handle()
       .then((res) => sendResponse({ ok: true, data: res }))
       .catch((err) =>
-        sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) })
+        sendResponse({ ok: false, error: redactSecrets(err instanceof Error ? err.message : String(err)) })
       );
     return true; // Keep message channel open for async response
   });

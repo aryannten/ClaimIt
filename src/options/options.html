@@ -124,7 +124,7 @@
           </div>
           <div class="field">
             <label for="discordWebhookUrl">Webhook URL</label>
-            <input id="discordWebhookUrl" name="discordWebhookUrl" type="url" class="input" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" spellcheck="false" />
+            <input id="discordWebhookUrl" name="discordWebhookUrl" type="password" class="input" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" spellcheck="false" />
             <p class="helper">Must use HTTPS. Requests optional host permission for discord.com.</p>
           </div>
           <div class="inline-actions">
@@ -170,8 +170,7 @@
             <li><code>alarms</code>, <code>notifications</code>, <code>storage</code>, <code>scripting</code>, <code>tabs</code>: schedule checks, show desktop alerts, save local history, and manage temporary background claim tabs.</li>
           </ul>
           <p class="helper">
-            Documentation and source layout: <a href="../../README.md" target="_blank" rel="noopener" class="text-link">README.md</a>
-            and <a href="../../TESTING.md" target="_blank" rel="noopener" class="text-link">TESTING.md</a>.
+            Source code, security notes, and manual test steps are documented in the project repository.
           </p>
         </div>
       </div>
@@ -208,7 +207,7 @@
         <p class="helper">Remote selector overrides and local history reset.</p>
       </div>
       <div class="panel">
-        <div class="control-group first">
+        <div class="control-group">
           <div class="field">
             <label for="remoteConfigUrl">Remote selector JSON URL</label>
             <div class="inline-row">

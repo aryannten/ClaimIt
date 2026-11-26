@@ -281,6 +281,9 @@ async function saveNotificationFields() {
 
 async function applyCurrencySelection(selectedValue) {
   const currency = selectedValue || 'auto';
+  if (currency !== 'auto') {
+    await ensureHostPermission(['https://open.er-api.com/*']);
+  }
   const nextSettings = await saveSettings({ currency });
   const storedRegion = await getRegionState();
   const region = resolveRegionAndCurrency({ settings: nextSettings, storedRegion });
@@ -378,7 +381,15 @@ els.remoteConfigUrl.addEventListener('change', async () => {
 });
 
 els.refreshConfigBtn.addEventListener('click', async () => {
-  await saveSettings({ remoteConfigUrl: els.remoteConfigUrl.value.trim() });
+  const remoteUrl = els.remoteConfigUrl.value.trim();
+  if (remoteUrl.startsWith('https://raw.githubusercontent.com/')) {
+    const granted = await ensureHostPermission(['https://raw.githubusercontent.com/*']);
+    if (!granted) {
+      flashStatus('Remote config host permission declined', true);
+      return;
+    }
+  }
+  await saveSettings({ remoteConfigUrl: remoteUrl });
   const res = await sendBgMessage({ type: 'CLAIMIT_REFRESH_REMOTE_CONFIG' });
   if (res?.ok && res.data) {
     const { source, error } = res.data;

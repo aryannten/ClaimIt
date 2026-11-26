@@ -1,71 +1,153 @@
 /**
- * Remote selector & endpoint configuration loader with schema validation,
- * chrome.storage.local caching, and safe fallback to the bundled config/selectors.json.
+ * Remote selector & endpoint configuration loader with strict schema validation,
+ * chrome.storage.local caching, size cap, and safe fallback to config/selectors.json.
  */
 
 import { getCachedRemoteConfig, setCachedRemoteConfig, getSettings } from './storage.js';
 import { logger } from './logger.js';
+import { isAllowedStoreEndpointUrl } from './url-validator.js';
+
+const MAX_REMOTE_CONFIG_BYTES = 524_288; // 512 KB
+const ALLOWED_ROOT_KEYS = new Set(['version', 'updatedAt', 'stores']);
+const ALLOWED_STORE_IDS = new Set(['epic', 'steam']);
+const ALLOWED_STORE_SECTIONS = new Set(['endpoints', 'selectors', 'texts']);
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+const ALLOWED_STORE_KEYS = {
+  epic: {
+    endpoints: new Set(['promotions', 'storeBase', 'bundleBase', 'freeGamesPage']),
+    selectors: new Set([
+      'getButton',
+      'placeOrderButton',
+      'euAgreeButton',
+      'eulaCheckbox',
+      'checkoutContainer',
+      'checkoutIframe',
+      'captchaContainer',
+      'ownedIndicator',
+      'regionUnavailableIndicator',
+      'loginIndicator'
+    ]),
+    texts: new Set([
+      'getButton',
+      'placeOrderButton',
+      'euAgreeButton',
+      'owned',
+      'unavailable',
+      'loginRequired',
+      'orderConfirmed'
+    ])
+  },
+  steam: {
+    endpoints: new Set(['searchResults', 'userdata', 'appBase', 'steamdbFree']),
+    selectors: new Set([
+      'purchaseContainer',
+      'addToAccountButton',
+      'ownedIndicator',
+      'ageGateForm',
+      'ageGateYear',
+      'ageGateContinue',
+      'loginIndicator',
+      'accountIndicator',
+      'regionError'
+    ]),
+    texts: new Set([
+      'addToAccount',
+      'alreadyOwned',
+      'loginRequired',
+      'ageGate',
+      'freeWeekendOrTrial',
+      'unavailable',
+      'claimedSuccess'
+    ])
+  }
+};
 
 function isNonEmptyString(val) {
-  return typeof val === 'string' && val.trim().length > 0;
+  return typeof val === 'string' && val.trim().length > 0 && val.length <= 512;
 }
 
 function isStringArray(val) {
-  return Array.isArray(val) && val.every((item) => isNonEmptyString(item));
+  return Array.isArray(val) && val.length > 0 && val.length <= 32 && val.every((item) => isNonEmptyString(item));
 }
 
-function isStringRecord(val) {
+function isPlainRecord(val) {
   return Boolean(val) && typeof val === 'object' && !Array.isArray(val);
 }
 
+function checkAllowedKeys(obj, allowedSet, pathLabel, errors) {
+  for (const key of Object.keys(obj)) {
+    if (FORBIDDEN_KEYS.has(key) || !allowedSet.has(key)) {
+      errors.push(`Unexpected key at ${pathLabel}.${key}`);
+    }
+  }
+}
+
 /**
- * Validate remote selectors.json schema strictly so malformed or unexpected payloads
- * never break store automation.
+ * Validate remote selectors.json schema strictly:
+ * rejects wrong types, unknown keys, oversized lists, and non-store endpoint URLs.
  * @param {unknown} candidate
  * @returns {{ valid: boolean, errors: string[] }}
  */
 export function validateSelectorsConfig(candidate) {
   const errors = [];
-  if (!isStringRecord(candidate)) {
+  if (!isPlainRecord(candidate)) {
     return { valid: false, errors: ['Root config must be a JSON object'] };
   }
-  if (typeof candidate.version !== 'number' || candidate.version < 1) {
+  checkAllowedKeys(candidate, ALLOWED_ROOT_KEYS, 'root', errors);
+
+  if (typeof candidate.version !== 'number' || !Number.isFinite(candidate.version) || candidate.version < 1) {
     errors.push('version must be a positive number');
   }
-  if (!isStringRecord(candidate.stores)) {
+  if (candidate.updatedAt !== undefined && typeof candidate.updatedAt !== 'string') {
+    errors.push('updatedAt must be a string when present');
+  }
+  if (!isPlainRecord(candidate.stores)) {
     errors.push('stores must be an object');
     return { valid: false, errors };
   }
+  checkAllowedKeys(candidate.stores, ALLOWED_STORE_IDS, 'stores', errors);
 
-  for (const storeId of ['epic', 'steam']) {
+  for (const storeId of ALLOWED_STORE_IDS) {
     const store = candidate.stores[storeId];
-    if (!isStringRecord(store)) {
+    if (!isPlainRecord(store)) {
       errors.push(`stores.${storeId} must be an object`);
       continue;
     }
-    if (!isStringRecord(store.endpoints) || Object.keys(store.endpoints).length === 0) {
+    checkAllowedKeys(store, ALLOWED_STORE_SECTIONS, `stores.${storeId}`, errors);
+
+    const schema = ALLOWED_STORE_KEYS[storeId];
+
+    if (!isPlainRecord(store.endpoints) || Object.keys(store.endpoints).length === 0) {
       errors.push(`stores.${storeId}.endpoints must be a non-empty object`);
     } else {
+      checkAllowedKeys(store.endpoints, schema.endpoints, `stores.${storeId}.endpoints`, errors);
       for (const [k, url] of Object.entries(store.endpoints)) {
         if (!isNonEmptyString(url) || !url.startsWith('https://')) {
           errors.push(`stores.${storeId}.endpoints.${k} must be an https:// URL`);
+        } else if (!isAllowedStoreEndpointUrl(storeId, url)) {
+          errors.push(`stores.${storeId}.endpoints.${k} points to a disallowed host`);
         }
       }
     }
-    if (!isStringRecord(store.selectors) || Object.keys(store.selectors).length === 0) {
+
+    if (!isPlainRecord(store.selectors) || Object.keys(store.selectors).length === 0) {
       errors.push(`stores.${storeId}.selectors must be a non-empty object`);
     } else {
+      checkAllowedKeys(store.selectors, schema.selectors, `stores.${storeId}.selectors`, errors);
       for (const [k, arr] of Object.entries(store.selectors)) {
-        if (!isStringArray(arr) || arr.length === 0) {
+        if (!isStringArray(arr)) {
           errors.push(`stores.${storeId}.selectors.${k} must be a non-empty array of non-empty strings`);
         }
       }
     }
-    if (!isStringRecord(store.texts) || Object.keys(store.texts).length === 0) {
+
+    if (!isPlainRecord(store.texts) || Object.keys(store.texts).length === 0) {
       errors.push(`stores.${storeId}.texts must be a non-empty object`);
     } else {
+      checkAllowedKeys(store.texts, schema.texts, `stores.${storeId}.texts`, errors);
       for (const [k, arr] of Object.entries(store.texts)) {
-        if (!isStringArray(arr) || arr.length === 0) {
+        if (!isStringArray(arr)) {
           errors.push(`stores.${storeId}.texts.${k} must be a non-empty array of non-empty strings`);
         }
       }
@@ -75,29 +157,39 @@ export function validateSelectorsConfig(candidate) {
   return { valid: errors.length === 0, errors };
 }
 
+function pickWhitelistedSection(baseSection, remoteSection, allowedKeys) {
+  const result = {};
+  for (const key of allowedKeys) {
+    if (remoteSection && Object.hasOwn(remoteSection, key)) {
+      result[key] = Array.isArray(remoteSection[key]) ? remoteSection[key].slice() : remoteSection[key];
+    } else if (baseSection && Object.hasOwn(baseSection, key)) {
+      result[key] = Array.isArray(baseSection[key]) ? baseSection[key].slice() : baseSection[key];
+    }
+  }
+  return result;
+}
+
 /**
- * Merge a validated remote config over the bundled config so missing optional keys
- * gracefully inherit bundled defaults.
+ * Merge a validated remote config over the bundled config using explicit key allowlists
+ * so unknown keys or prototype properties can never be copied.
  * @param {object} bundled
  * @param {object} remote
  * @returns {object}
  */
 export function mergeConfigs(bundled, remote) {
   const merged = {
-    ...bundled,
-    ...remote,
+    version: typeof remote?.version === 'number' ? remote.version : bundled.version,
+    updatedAt: typeof remote?.updatedAt === 'string' ? remote.updatedAt : bundled.updatedAt,
     stores: {}
   };
-  for (const storeId of new Set([
-    ...Object.keys(bundled.stores || {}),
-    ...Object.keys(remote?.stores || {})
-  ])) {
-    const b = bundled.stores?.[storeId] || {};
+  for (const storeId of ALLOWED_STORE_IDS) {
+    const b = bundled?.stores?.[storeId] || {};
     const r = remote?.stores?.[storeId] || {};
+    const schema = ALLOWED_STORE_KEYS[storeId];
     merged.stores[storeId] = {
-      endpoints: { ...(b.endpoints || {}), ...(r.endpoints || {}) },
-      selectors: { ...(b.selectors || {}), ...(r.selectors || {}) },
-      texts: { ...(b.texts || {}), ...(r.texts || {}) }
+      endpoints: pickWhitelistedSection(b.endpoints, r.endpoints, schema.endpoints),
+      selectors: pickWhitelistedSection(b.selectors, r.selectors, schema.selectors),
+      texts: pickWhitelistedSection(b.texts, r.texts, schema.texts)
     };
   }
   return merged;
@@ -118,16 +210,33 @@ async function loadBundledConfig() {
   return response.json();
 }
 
+function isDisallowedHostname(hostname) {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (
+    host === 'localhost' ||
+    host.endsWith('.local') ||
+    host === '::1' ||
+    host === '0.0.0.0'
+  ) {
+    return true;
+  }
+  // Block RFC1918, loopback, and link-local IPv4 ranges
+  return /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+}
+
 /**
- * Validate whether a remote config URL is safe to fetch (HTTPS only, JSON data only).
+ * Validate whether a remote config URL is safe to fetch (HTTPS only, no credentials, no local/LAN IPs).
  * @param {string} url
  * @returns {boolean}
  */
-function isValidRemoteConfigUrl(url) {
+export function isValidRemoteConfigUrl(url) {
   if (!isNonEmptyString(url)) return false;
   try {
     const parsed = new URL(url.trim());
-    return parsed.protocol === 'https:';
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+      return false;
+    }
+    return !isDisallowedHostname(parsed.hostname);
   } catch {
     return false;
   }
@@ -149,7 +258,7 @@ export async function getSelectorsConfig(options = {}) {
   }
 
   if (!isValidRemoteConfigUrl(remoteUrl)) {
-    const err = 'Invalid remote config URL (must use https://)';
+    const err = 'Invalid remote config URL (must use https:// public host without credentials)';
     await logger.warn('remote-config', err, { remoteUrl });
     return { config: bundled, source: 'bundled', error: err };
   }
@@ -176,6 +285,7 @@ export async function getSelectorsConfig(options = {}) {
       method: 'GET',
       headers: { Accept: 'application/json' },
       cache: 'no-store',
+      redirect: 'error',
       signal: controller.signal
     });
     clearTimeout(timer);
@@ -183,7 +293,15 @@ export async function getSelectorsConfig(options = {}) {
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
     }
-    const json = await resp.json();
+    const contentLen = Number(resp.headers?.get?.('content-length') || 0);
+    if (Number.isFinite(contentLen) && contentLen > MAX_REMOTE_CONFIG_BYTES) {
+      throw new Error('Remote config response exceeds 512 KB size limit');
+    }
+    const rawText = await resp.text();
+    if (rawText.length > MAX_REMOTE_CONFIG_BYTES) {
+      throw new Error('Remote config response exceeds 512 KB size limit');
+    }
+    const json = JSON.parse(rawText);
     const validation = validateSelectorsConfig(json);
     if (!validation.valid) {
       throw new Error(`Schema validation failed: ${validation.errors.join('; ')}`);

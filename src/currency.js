@@ -338,20 +338,35 @@ export function convertAmount(amount, fromCurrency, toCurrency, rates) {
  *   saveCacheFn?: (entry: object) => Promise<void>
  * }} [options]
  */
+const MAX_REASONABLE_FX_RATE = 1_000_000;
+
+function sanitizeRatesMap(rawRates) {
+  if (!rawRates || typeof rawRates !== 'object') return null;
+  const cleanRates = { [DEFAULT_FALLBACK_CURRENCY]: 1 };
+  for (const [k, v] of Object.entries(rawRates)) {
+    const code = normalizeCurrencyCode(k);
+    const val = Number(v);
+    if (code && Number.isFinite(val) && val > 0 && val < MAX_REASONABLE_FX_RATE) {
+      cleanRates[code] = val;
+    }
+  }
+  return Object.keys(cleanRates).length > 1 ? cleanRates : null;
+}
+
 export async function getExchangeRates({
   cached = null,
   nowMs = Date.now(),
   fetchFn = typeof fetch === 'function' ? fetch : null,
   saveCacheFn = null
 } = {}) {
+  const sanitizedCachedRates = sanitizeRatesMap(cached?.rates);
   if (
     cached &&
-    cached.rates &&
-    typeof cached.rates === 'object' &&
+    sanitizedCachedRates &&
     Number.isFinite(cached.fetchedAtMs) &&
     nowMs - cached.fetchedAtMs < FX_CACHE_TTL_MS
   ) {
-    return { ...cached, fromCache: true, stale: false };
+    return { ...cached, rates: sanitizedCachedRates, fromCache: true, stale: false };
   }
 
   if (typeof fetchFn === 'function') {
@@ -362,26 +377,23 @@ export async function getExchangeRates({
         method: 'GET',
         headers: { Accept: 'application/json' },
         cache: 'no-store',
+        redirect: 'error',
         signal: controller?.signal
       });
       if (resp && resp.ok) {
+        const contentLen = Number(resp.headers?.get?.('content-length') || 0);
+        if (Number.isFinite(contentLen) && contentLen > 524288) {
+          throw new Error('Exchange-rate response exceeds size limit');
+        }
         const json = await resp.json();
-        const rawRates = json?.rates;
-        if (json?.result === 'success' && rawRates && typeof rawRates === 'object') {
-          const cleanRates = { [DEFAULT_FALLBACK_CURRENCY]: 1 };
-          for (const [k, v] of Object.entries(rawRates)) {
-            const code = normalizeCurrencyCode(k);
-            const val = Number(v);
-            if (code && Number.isFinite(val) && val > 0) {
-              cleanRates[code] = val;
-            }
-          }
-          if (Object.keys(cleanRates).length > 1) {
+        if (json?.result === 'success') {
+          const cleanRates = sanitizeRatesMap(json.rates);
+          if (cleanRates) {
             const entry = {
               baseCode: DEFAULT_FALLBACK_CURRENCY,
               rates: cleanRates,
               fetchedAtMs: nowMs,
-              dateLabel: String(json.time_last_update_utc || new Date(nowMs).toISOString())
+              dateLabel: String(json.time_last_update_utc || new Date(nowMs).toISOString()).slice(0, 64)
             };
             if (typeof saveCacheFn === 'function') {
               await saveCacheFn(entry);
@@ -397,8 +409,8 @@ export async function getExchangeRates({
     }
   }
 
-  if (cached && cached.rates && typeof cached.rates === 'object') {
-    return { ...cached, fromCache: true, stale: true };
+  if (cached && sanitizedCachedRates) {
+    return { ...cached, rates: sanitizedCachedRates, fromCache: true, stale: true };
   }
   return null;
 }

@@ -22,16 +22,18 @@ import {
   formatLocalDateTime,
   normalizeCurrencyCode
 } from './currency.js';
-import { logger } from './logger.js';
+import { logger, redactSecrets } from './logger.js';
+import { isAllowedStoreUrl, isAllowedDiscordWebhookUrl } from './url-validator.js';
 
 const TARGETS_STORAGE_KEY = 'claimit_notification_targets';
 const MAX_IMAGE_BYTES = 1_500_000;
-
-function redactSecrets(text) {
-  return String(text || '')
-    .replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]')
-    .replace(/\/webhooks\/[^/\s]+\/[^/\s]+/g, '/webhooks/[REDACTED]');
-}
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/avif'
+]);
 
 /**
  * Pure helper to determine whether a notification should be emitted for an offer in a cycle.
@@ -74,12 +76,15 @@ async function fetchCoverDataUrl(imageUrl) {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
-    const resp = await fetch(imageUrl, { signal: controller.signal });
+    const resp = await fetch(imageUrl, { signal: controller.signal, redirect: 'error' });
     clearTimeout(timer);
     if (!resp.ok) return null;
 
-    const contentType = (resp.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
-    if (!contentType.startsWith('image/')) return null;
+    const contentType = (resp.headers.get('content-type') || 'image/jpeg').split(';')[0].trim().toLowerCase();
+    if (!ALLOWED_IMAGE_MIME_TYPES.has(contentType)) return null;
+
+    const contentLength = Number(resp.headers.get('content-length') || 0);
+    if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_BYTES) return null;
 
     const buffer = await resp.arrayBuffer();
     if (buffer.byteLength === 0 || buffer.byteLength > MAX_IMAGE_BYTES) return null;
@@ -224,7 +229,7 @@ export function buildTelegramPayload(offer, status, reason, chatId, currencyCont
     disable_web_page_preview: false
   };
 
-  if (offer.url && offer.url.startsWith('https://')) {
+  if (isAllowedStoreUrl(offer.url)) {
     payload.reply_markup = {
       inline_keyboard: [[{ text: 'Claim now', url: offer.url }]]
     };
@@ -254,17 +259,21 @@ export function buildDiscordPayload(offer, status, reason, currencyContext = nul
   const priceNote = priceLabel ? ` (normally ${priceLabel})` : '';
   const isNeedsUser = status === CLAIM_STATUS.NEEDS_USER;
 
+  const safeUrl = isAllowedStoreUrl(offer.url) ? offer.url : undefined;
+  const safeImage =
+    typeof offer.image === 'string' && offer.image.startsWith('https://') ? offer.image : undefined;
+
   return {
     username: 'ClaimIt',
     embeds: [
       {
         title: `${offer.title}${dlcTag}`,
-        url: offer.url,
+        url: safeUrl,
         description: isNeedsUser
           ? `Free on ${storeName}${until}${priceNote}. ${reason || 'Needs you to claim.'}`
           : `Could not claim on ${storeName}${priceNote}. Reason: ${reason || 'Unknown error'}.`,
         color: isNeedsUser ? 0x16a34a : 0xdc2626,
-        thumbnail: offer.image ? { url: offer.image } : undefined,
+        thumbnail: safeImage ? { url: safeImage } : undefined,
         footer: { text: `ClaimIt · ${storeName}` },
         timestamp: new Date().toISOString()
       }
@@ -274,7 +283,11 @@ export function buildDiscordPayload(offer, status, reason, currencyContext = nul
 
 async function sendTelegramAlert(telegramCfg, offer, status, reason, currencyContext) {
   if (!telegramCfg?.enabled || !telegramCfg.botToken || !telegramCfg.chatId) return;
-  const url = `https://api.telegram.org/bot${encodeURIComponent(telegramCfg.botToken.trim())}/sendMessage`;
+  const token = String(telegramCfg.botToken).trim();
+  if (!/^\d+:[A-Za-z0-9_-]{20,}$/.test(token)) {
+    throw new Error('Telegram bot token format is invalid');
+  }
+  const url = `https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`;
   const payload = buildTelegramPayload(offer, status, reason, telegramCfg.chatId.trim(), currencyContext);
 
   const controller = new AbortController();
@@ -284,11 +297,14 @@ async function sendTelegramAlert(telegramCfg, offer, status, reason, currencyCon
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      redirect: 'error',
       signal: controller.signal
     });
     if (!resp.ok) {
       throw new Error(`Telegram API HTTP ${resp.status}`);
     }
+  } catch (err) {
+    throw new Error(redactSecrets(err instanceof Error ? err.message : String(err)));
   } finally {
     clearTimeout(timer);
   }
@@ -296,9 +312,9 @@ async function sendTelegramAlert(telegramCfg, offer, status, reason, currencyCon
 
 async function sendDiscordAlert(discordCfg, offer, status, reason, currencyContext) {
   if (!discordCfg?.enabled || !discordCfg.webhookUrl) return;
-  const url = discordCfg.webhookUrl.trim();
-  if (!url.startsWith('https://')) {
-    throw new Error('Discord webhook URL must use https://');
+  const url = String(discordCfg.webhookUrl).trim();
+  if (!isAllowedDiscordWebhookUrl(url)) {
+    throw new Error('Discord webhook URL must be a valid https://discord.com/api/webhooks/... URL');
   }
   const payload = buildDiscordPayload(offer, status, reason, currencyContext);
 
@@ -309,11 +325,14 @@ async function sendDiscordAlert(discordCfg, offer, status, reason, currencyConte
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      redirect: 'error',
       signal: controller.signal
     });
     if (!resp.ok) {
       throw new Error(`Discord webhook HTTP ${resp.status}`);
     }
+  } catch (err) {
+    throw new Error(redactSecrets(err instanceof Error ? err.message : String(err)));
   } finally {
     clearTimeout(timer);
   }

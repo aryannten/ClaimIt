@@ -1,15 +1,36 @@
 /**
  * Structured ring-buffer logger backed by chrome.storage.local (last 50 entries).
+ * Automatically redacts Telegram bot tokens and Discord webhook secrets before storing.
  */
 
 const MAX_LOG_ENTRIES = 50;
 const LOG_STORAGE_KEY = 'claimit_logs';
 
 /**
+ * Strip Telegram bot tokens and webhook secrets from log strings.
+ * @param {unknown} text
+ * @returns {string}
+ */
+export function redactSecrets(text) {
+  return String(text || '')
+    .replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]')
+    .replace(/\/webhooks\/[^/\s]+\/[^/\s]+/g, '/webhooks/[REDACTED]');
+}
+
+function sanitizeMeta(meta) {
+  if (meta === null || meta === undefined) return null;
+  try {
+    return JSON.parse(redactSecrets(JSON.stringify(meta)));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Pure helper to append an entry to a bounded ring buffer.
  * @param {object[]} existing
  * @param {object} entry
- * @param {number} [maxEntries=200]
+ * @param {number} [maxEntries=50]
  * @returns {object[]}
  */
 export function appendToRingBuffer(existing, entry, maxEntries = MAX_LOG_ENTRIES) {
@@ -22,7 +43,7 @@ export function appendToRingBuffer(existing, entry, maxEntries = MAX_LOG_ENTRIES
 }
 
 /**
- * Format a structured log entry.
+ * Format a structured log entry with automatic secret redaction.
  * @param {'debug'|'info'|'warn'|'error'} level
  * @param {string} scope
  * @param {string} message
@@ -35,8 +56,8 @@ function createLogEntry(level, scope, message, meta = null) {
     ts: new Date().toISOString(),
     level,
     scope,
-    message,
-    meta: meta ?? null
+    message: redactSecrets(message),
+    meta: sanitizeMeta(meta)
   };
 }
 

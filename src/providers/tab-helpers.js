@@ -4,6 +4,7 @@
  */
 
 import { delay } from './constants.js';
+import { isAllowedStoreUrl } from '../url-validator.js';
 
 /**
  * Open a tab in the background and wait until its initial navigation completes.
@@ -12,6 +13,9 @@ import { delay } from './constants.js';
  * @returns {Promise<chrome.tabs.Tab>}
  */
 export async function openBackgroundTab(url, signal) {
+  if (!isAllowedStoreUrl(url)) {
+    throw new Error(`openBackgroundTab: URL not on store allowlist: ${url}`);
+  }
   const tab = await chrome.tabs.create({ url, active: false });
   await waitForTabComplete(tab.id, 25000, signal);
   return chrome.tabs.get(tab.id);
