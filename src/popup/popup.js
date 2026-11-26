@@ -1,6 +1,7 @@
 import {
   STORAGE_KEYS,
   getSettings,
+  saveSettings,
   getHistory,
   getCurrentOffers,
   getMeta,
@@ -8,8 +9,11 @@ import {
   getCachedFxRates,
   setCachedFxRates,
   computeValueSaved,
-  getAccountStates
+  getAccountStates,
+  getSteamDeals,
+  clampSteamMinDiscount
 } from '../storage.js';
+import { filterSteamDiscountDeals } from '../providers/steam.js';
 import {
   resolveRegionAndCurrency,
   getExchangeRates,
@@ -37,7 +41,8 @@ const RELEVANT_STORAGE_KEYS = new Set([
   STORAGE_KEYS.META,
   STORAGE_KEYS.REGION,
   STORAGE_KEYS.FX_RATES,
-  STORAGE_KEYS.ACCOUNTS
+  STORAGE_KEYS.ACCOUNTS,
+  STORAGE_KEYS.STEAM_DEALS
 ]);
 
 const COVER_FALLBACK = '../../assets/cover-fallback.svg';
@@ -53,9 +58,15 @@ const els = {
   checkNowBtn: document.getElementById('checkNowBtn'),
   checkNowLabel: document.getElementById('checkNowLabel'),
   freeCount: document.getElementById('freeCount'),
+  dealsCount: document.getElementById('dealsCount'),
   claimedCount: document.getElementById('claimedCount'),
   issuesCount: document.getElementById('issuesCount'),
   tabFree: document.getElementById('tab-free'),
+  tabDeals: document.getElementById('tab-deals'),
+  dealsDiscountSlider: document.getElementById('dealsDiscountSlider'),
+  dealsDiscountValue: document.getElementById('dealsDiscountValue'),
+  refreshDealsBtn: document.getElementById('refreshDealsBtn'),
+  dealsListContainer: document.getElementById('dealsListContainer'),
   tabClaimed: document.getElementById('tab-claimed'),
   tabIssues: document.getElementById('tab-issues')
 };
@@ -63,6 +74,9 @@ const els = {
 let renderInFlight = false;
 let renderQueued = false;
 let lastIpcError = null;
+let latestSteamDeals = [];
+let latestPriceContext = null;
+let autoLoadedDealsOnce = false;
 
 function isSafeHttpsUrl(url) {
   return isAllowedStoreUrl(url);
@@ -445,8 +459,169 @@ function renderAccountsBar(accounts) {
   }
 }
 
+function formatDiscountLabel(minDiscount) {
+  const val = clampSteamMinDiscount(minDiscount);
+  return val >= 100 ? '100% (Free only)' : `${val}%+ off`;
+}
+
+function createDealRow(item, priceContext) {
+  const row = document.createElement('article');
+  row.className = 'offer-row';
+
+  const img = document.createElement('img');
+  img.className = 'offer-thumb';
+  img.width = 76;
+  img.height = 44;
+  img.src = isSafeHttpsUrl(item.image) ? item.image : COVER_FALLBACK;
+  img.alt = item.title ? `${item.title} cover` : 'Game cover';
+  img.addEventListener('error', () => {
+    if (!img.src.endsWith('cover-fallback.svg')) {
+      img.src = COVER_FALLBACK;
+    }
+  });
+  row.appendChild(img);
+
+  const main = document.createElement('div');
+  main.className = 'offer-main';
+
+  const title = document.createElement('h3');
+  title.className = 'offer-title';
+  title.textContent = item.title;
+  title.title = item.title;
+  main.appendChild(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'offer-meta tabular';
+
+  const storeTag = document.createElement('span');
+  storeTag.className = 'store-tag';
+  storeTag.append(createSvgUse('store-steam', 'store-tile', 'stores.svg'), document.createTextNode('Steam'));
+  meta.appendChild(storeTag);
+
+  const origState = formatOfferPriceState(
+    {
+      originalPriceValue: item.originalPrice,
+      originalPriceFormatted: item.originalPriceFormatted,
+      currencyCode: item.currencyCode
+    },
+    priceContext
+  );
+  const saleState = formatOfferPriceState(
+    {
+      originalPriceValue: item.discountPrice,
+      originalPriceFormatted: item.discountPriceFormatted,
+      currencyCode: item.currencyCode
+    },
+    priceContext
+  );
+
+  const pricePair = document.createElement('span');
+  pricePair.className = 'price-pair';
+  if (origState.available) {
+    const del = document.createElement('del');
+    del.className = 'price-old';
+    del.textContent = origState.approx ? `~${origState.formatted}` : origState.formatted;
+    pricePair.appendChild(del);
+  }
+  const sale = document.createElement('span');
+  sale.className = 'price-free';
+  sale.textContent = saleState.available
+    ? (saleState.approx ? `~${saleState.formatted}` : saleState.formatted)
+    : (item.discountPriceFormatted || 'Sale');
+  pricePair.appendChild(sale);
+  meta.appendChild(pricePair);
+  main.appendChild(meta);
+
+  const statusLine = document.createElement('div');
+  statusLine.className = 'offer-status-line';
+  const pctBadge = document.createElement('span');
+  pctBadge.className = 'badge badge-claimed tabular';
+  pctBadge.textContent = `-${item.discountPercent}%`;
+  statusLine.appendChild(pctBadge);
+  main.appendChild(statusLine);
+
+  row.appendChild(main);
+
+  const actions = document.createElement('div');
+  actions.className = 'offer-actions';
+  if (isSafeHttpsUrl(item.url)) {
+    const viewBtn = document.createElement('button');
+    viewBtn.type = 'button';
+    viewBtn.className = 'btn btn-primary';
+    viewBtn.append(createSvgUse('icon-external-link'), document.createTextNode('View deal'));
+    viewBtn.addEventListener('click', () => {
+      openStoreTab(item.url);
+    });
+    actions.appendChild(viewBtn);
+  }
+  row.appendChild(actions);
+  return row;
+}
+
+async function renderDealsList(allDeals, minDiscount, priceContext, steamEnabled) {
+  if (!els.dealsListContainer) return;
+  const threshold = clampSteamMinDiscount(minDiscount);
+  if (els.dealsDiscountValue) {
+    els.dealsDiscountValue.textContent = formatDiscountLabel(threshold);
+  }
+  if (els.dealsDiscountSlider && document.activeElement !== els.dealsDiscountSlider) {
+    els.dealsDiscountSlider.value = String(threshold);
+  }
+
+  const filtered = threshold >= 100 ? [] : filterSteamDiscountDeals(allDeals, threshold);
+  if (els.dealsCount) {
+    els.dealsCount.textContent = String(filtered.length);
+  }
+
+  els.dealsListContainer.replaceChildren();
+  if (!steamEnabled) {
+    await renderStateBox(els.dealsListContainer, {
+      illusId: 'illus-empty-free',
+      title: 'Steam is disabled',
+      desc: 'Enable Steam in Settings to view discounted specials.'
+    });
+    return;
+  }
+  if (threshold >= 100) {
+    await renderStateBox(els.dealsListContainer, {
+      illusId: 'illus-empty-free',
+      title: 'Free games only (100%)',
+      desc: 'Slide the percentage bar between 40% and 99% to browse Steam sale discounts.'
+    });
+    return;
+  }
+  if (allDeals.length === 0) {
+    await renderStateBox(els.dealsListContainer, {
+      illusId: 'illus-first-run',
+      title: 'No Steam deals loaded yet',
+      desc: 'Load current Steam store discounts at your chosen minimum percentage.',
+      actionLabel: 'Load deals',
+      onAction: async () => {
+        await sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
+        await scheduleRender();
+      }
+    });
+    return;
+  }
+  if (filtered.length === 0) {
+    await renderStateBox(els.dealsListContainer, {
+      illusId: 'illus-empty-free',
+      title: `No Steam specials at ${threshold}%+ off`,
+      desc: 'Lower the discount bar toward 40% to see more Steam sale titles.'
+    });
+    return;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'offer-list';
+  for (const deal of filtered) {
+    list.appendChild(createDealRow(deal, priceContext));
+  }
+  els.dealsListContainer.appendChild(list);
+}
+
 async function render() {
-  const [settings, historyMap, currentOffers, meta, storedRegion, cachedFx, alarm, logs, accounts] = await Promise.all([
+  const [settings, historyMap, currentOffers, meta, storedRegion, cachedFx, alarm, logs, accounts, steamDeals] = await Promise.all([
     getSettings(),
     getHistory(),
     getCurrentOffers(),
@@ -455,13 +630,15 @@ async function render() {
     getCachedFxRates(),
     chrome.alarms?.get ? chrome.alarms.get('claimit_check_alarm').catch(() => null) : Promise.resolve(null),
     logger.getAll().catch(() => []),
-    getAccountStates()
+    getAccountStates(),
+    getSteamDeals()
   ]);
   renderAccountsBar(accounts);
+  latestSteamDeals = steamDeals;
 
   const region = resolveRegionAndCurrency({ settings, storedRegion });
   const allHistory = Object.values(historyMap);
-  const needsFx = [...currentOffers, ...allHistory].some((item) => {
+  const needsFx = [...currentOffers, ...allHistory, ...steamDeals].some((item) => {
     const cur = normalizeCurrencyCode(item?.currencyCode ?? item?.currency);
     return cur && cur !== region.currency;
   });
@@ -481,6 +658,15 @@ async function render() {
     locale: region.locale,
     rates: fxEntry?.rates || null
   };
+  latestPriceContext = priceContext;
+
+  const steamEnabled = Boolean(settings.stores?.steam?.enabled);
+  const minDiscount = clampSteamMinDiscount(settings.steamMinDiscount);
+  await renderDealsList(steamDeals, minDiscount, priceContext, steamEnabled);
+  if (steamEnabled && minDiscount < 100 && steamDeals.length === 0 && !autoLoadedDealsOnce) {
+    autoLoadedDealsOnce = true;
+    sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
+  }
 
   const paused = Boolean(settings.paused);
   els.pauseBtn.setAttribute('aria-checked', String(paused));
@@ -709,6 +895,31 @@ els.pauseBtn.addEventListener('click', async () => {
 });
 
 els.checkNowBtn.addEventListener('click', triggerCheck);
+
+els.dealsDiscountSlider?.addEventListener('input', () => {
+  const val = clampSteamMinDiscount(els.dealsDiscountSlider.value);
+  if (latestPriceContext) {
+    renderDealsList(latestSteamDeals, val, latestPriceContext, true);
+  }
+});
+
+els.dealsDiscountSlider?.addEventListener('change', async () => {
+  const val = clampSteamMinDiscount(els.dealsDiscountSlider.value);
+  await saveSettings({ steamMinDiscount: val });
+  if (val < 100 && latestSteamDeals.length === 0) {
+    await sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
+  }
+});
+
+els.refreshDealsBtn?.addEventListener('click', async () => {
+  els.refreshDealsBtn.disabled = true;
+  try {
+    await sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
+    await scheduleRender();
+  } finally {
+    els.refreshDealsBtn.disabled = false;
+  }
+});
 
 els.openOptionsBtn.addEventListener('click', () => {
   chrome.runtime.openOptionsPage();

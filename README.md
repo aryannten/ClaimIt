@@ -13,8 +13,8 @@ ClaimIt is a Chrome Manifest V3 extension that watches Epic Games Store and Stea
 ## What it does
 
 - Claims eligible giveaways automatically in a background tab, or notifies you when input is needed.
-- Supports Epic Games Store and Steam.
-- Filters strictly for limited-time 100%-off games and DLC, skipping free-to-play titles, demos, and trials.
+- Supports Epic Games Store and Steam, plus an optional **Deals** tab for paid Steam sales (40%–99% off).
+- Filters strictly for limited-time 100%-off games and DLC, ignoring free-to-play titles, demos, and trials.
 - Runs one randomised scan per day, scanning sooner only if a known offer expires early.
 - Displays store prices and total savings in your local currency, such as INR, EUR, USD, or JPY.
 - Sends desktop Chrome notifications plus optional Telegram Bot and Discord webhook alerts.
@@ -35,7 +35,7 @@ Internal notes on code layout, tests, and packaging live in [docs/DEVELOPMENT.md
 
 ## Using it
 
-- **Popup tabs**: Switch between **Free now**, **Claimed** (with total value saved), and **Issues**.
+- **Popup tabs**: Switch between **Free now**, **Deals** (Steam sales with a 40%–100% discount slider), **Claimed** (total saved), and **Issues**.
 - **Check now**: Runs a manual check immediately, subject to a 5-minute cooldown between runs.
 - **Store controls**: Enable or disable stores in Settings and choose **Auto-claim** or **Notify only** per store.
 - **Dry-run mode**: Walks through offer detection and checkout setup without clicking the final claim button.

@@ -23,8 +23,19 @@ export const STORAGE_KEYS = {
   REGION: 'claimit_region',
   FX_RATES: 'claimit_fx_rates',
   ACCOUNTS: 'claimit_accounts',
-  PENDING_SIGNIN: 'claimit_pending_signin'
+  PENDING_SIGNIN: 'claimit_pending_signin',
+  STEAM_DEALS: 'claimit_steam_deals'
 };
+
+export const MIN_STEAM_DISCOUNT_LIMIT = 40;
+export const MAX_STEAM_DISCOUNT_LIMIT = 100;
+export const DEFAULT_STEAM_MIN_DISCOUNT = 75;
+
+export function clampSteamMinDiscount(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return DEFAULT_STEAM_MIN_DISCOUNT;
+  return Math.min(MAX_STEAM_DISCOUNT_LIMIT, Math.max(MIN_STEAM_DISCOUNT_LIMIT, Math.round(num)));
+}
 
 const CYCLE_LOCK_TTL_MS = 5 * 60 * 1000;
 const MAX_HISTORY_ENTRIES = 500;
@@ -37,6 +48,7 @@ const DEFAULT_SETTINGS = {
   paused: false,
   dryRun: false,
   currency: 'auto',
+  steamMinDiscount: DEFAULT_STEAM_MIN_DISCOUNT,
   remoteConfigUrl: '',
   stores: {
     epic: { enabled: true, mode: 'auto' },
@@ -72,6 +84,10 @@ function mergeSettings(raw = {}) {
     paused: Boolean(raw.paused ?? DEFAULT_SETTINGS.paused),
     dryRun: Boolean(raw.dryRun ?? DEFAULT_SETTINGS.dryRun),
     currency: typeof raw.currency === 'string' ? raw.currency : DEFAULT_SETTINGS.currency,
+    steamMinDiscount:
+      raw.steamMinDiscount === undefined
+        ? DEFAULT_SETTINGS.steamMinDiscount
+        : clampSteamMinDiscount(raw.steamMinDiscount),
     remoteConfigUrl: typeof raw.remoteConfigUrl === 'string' ? raw.remoteConfigUrl : DEFAULT_SETTINGS.remoteConfigUrl,
     stores: mergedStores,
     notifications: {
@@ -548,4 +564,16 @@ export async function setPendingSignIn(info) {
 export async function clearPendingSignIn() {
   if (!hasChromeStorage()) return;
   await chrome.storage.local.remove(STORAGE_KEYS.PENDING_SIGNIN);
+}
+
+export async function getSteamDeals() {
+  if (!hasChromeStorage()) return [];
+  const data = await chrome.storage.local.get(STORAGE_KEYS.STEAM_DEALS);
+  return Array.isArray(data[STORAGE_KEYS.STEAM_DEALS]) ? data[STORAGE_KEYS.STEAM_DEALS] : [];
+}
+
+export async function setSteamDeals(deals) {
+  if (!hasChromeStorage()) return;
+  const clean = Array.isArray(deals) ? deals.slice(0, 50) : [];
+  await chrome.storage.local.set({ [STORAGE_KEYS.STEAM_DEALS]: clean });
 }
