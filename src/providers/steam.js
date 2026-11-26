@@ -78,8 +78,68 @@ function parsePriceText(priceText) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function parseSteamReviewSummary(body) {
+  const spanMatch = body.match(/<span\b[^>]*class="[^"]*search_review_summary\b([^"]*)"[^>]*>/i);
+  if (!spanMatch) {
+    return {
+      reviewSummary: null,
+      reviewSentiment: null,
+      reviewPercent: null,
+      reviewCount: null
+    };
+  }
+  const tag = spanMatch[0];
+  const classTail = spanMatch[1] || '';
+  const sentiment = /\bpositive\b/i.test(classTail)
+    ? 'positive'
+    : /\bmixed\b/i.test(classTail)
+      ? 'mixed'
+      : /\bnegative\b/i.test(classTail)
+        ? 'negative'
+        : null;
+
+  const tooltipMatch = tag.match(/data-tooltip-html="([^"]+)"/i);
+  if (!tooltipMatch) {
+    return {
+      reviewSummary: null,
+      reviewSentiment: sentiment,
+      reviewPercent: null,
+      reviewCount: null
+    };
+  }
+
+  const segments = tooltipMatch[1]
+    .split(/&lt;br\s*\/?&gt;|<br\s*\/?>/gi)
+    .map((s) => decodeHtmlEntities(s))
+    .filter(Boolean);
+  const reviewSummary = segments[0] || null;
+  const statsSegment = segments[1] || segments.join(' ');
+  const statsMatch = statsSegment.match(/(\d{1,3})\s*%[^0-9]*?(\d[\d,.\s\u00a0]*)/);
+
+  let reviewPercent = null;
+  let reviewCount = null;
+  if (statsMatch) {
+    const pct = Number.parseInt(statsMatch[1], 10);
+    const digits = statsMatch[2].replace(/[^\d]/g, '');
+    const count = digits ? Number.parseInt(digits, 10) : NaN;
+    if (Number.isFinite(pct) && pct >= 0 && pct <= 100) {
+      reviewPercent = pct;
+    }
+    if (Number.isFinite(count) && count >= 0) {
+      reviewCount = count;
+    }
+  }
+
+  return {
+    reviewSummary,
+    reviewSentiment: sentiment,
+    reviewPercent,
+    reviewCount
+  };
+}
+
 /**
- * Parse Steam's search results HTML fragment (from /search/results/?maxprice=free&specials=1&json=1)
+ * Parse Steam's search results HTML fragment (from /search/results/?...&json=1)
  * without DOM APIs so it works inside MV3 service workers and Node unit tests.
  * @param {string} resultsHtml
  * @param {object} [endpoints]
@@ -140,6 +200,7 @@ export function parseSteamSearchHtml(resultsHtml, endpoints = {}, options = {}) 
     const currencyCode = origFormatted
       ? inferCurrencyFromFormatted(origFormatted, country)
       : inferCurrencyFromCountry(country);
+    const review = parseSteamReviewSummary(body);
 
     offers.push({
       id: appId,
@@ -162,7 +223,11 @@ export function parseSteamSearchHtml(resultsHtml, endpoints = {}, options = {}) 
       type: 'game',
       isLimitedTime: discountPercent === 100 && originalPrice > 0,
       isFreeWeekend: hasFreeWeekendHint,
-      isFreeToPlay: originalPrice <= 0 && discountPercent < 100
+      isFreeToPlay: originalPrice <= 0 && discountPercent < 100,
+      reviewSummary: review.reviewSummary,
+      reviewSentiment: review.reviewSentiment,
+      reviewPercent: review.reviewPercent,
+      reviewCount: review.reviewCount
     });
   }
 
@@ -390,88 +455,211 @@ export async function fetchOffers(context = {}) {
 }
 
 /**
- * Pure filter returning paid discounted Steam deals meeting `minDiscount` (40-99%).
+ * Pure filter returning paid discounted Steam deals meeting `minDiscount` (40-99%),
+ * optionally matching search `query` tokens and sorted by `sortBy`.
  * Never includes 100%-off items (handled separately for auto-claiming) or free-to-play titles.
  * @param {object[]} offers
  * @param {number} [minDiscount=40]
  * @param {number[]|Set<number>|null} [ownedAppIds=null]
+ * @param {{ query?: string, sortBy?: 'popular'|'reviews'|'discount'|'price' }} [options]
  * @returns {object[]}
  */
-export function filterSteamDiscountDeals(offers, minDiscount = 40, ownedAppIds = null) {
+export function filterSteamDiscountDeals(offers, minDiscount = 40, ownedAppIds = null, options = {}) {
   const threshold = Math.round(Number(minDiscount));
   if (!Number.isFinite(threshold) || threshold >= 100) return [];
   const minPct = Math.max(40, threshold);
   const ownedSet = ownedAppIds instanceof Set
     ? ownedAppIds
     : new Set(Array.isArray(ownedAppIds) ? ownedAppIds.map((x) => Number(x)) : []);
+  const queryTokens = typeof options.query === 'string'
+    ? options.query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    : [];
+  const sortBy = options.sortBy || 'discount';
 
-  return (Array.isArray(offers) ? offers : [])
-    .filter((o) => {
-      if (!o || !o.id || !o.title) return false;
-      if (o.isFreeWeekend || o.isDemo || o.isFreeToPlay) return false;
-      const pct = Number(o.discountPercent ?? 0);
-      const orig = Number(o.originalPrice ?? 0);
-      const finalP = Number(o.discountPrice ?? 0);
-      if (!Number.isFinite(pct) || pct < minPct || pct >= 100) return false;
-      if (!Number.isFinite(orig) || orig <= 0) return false;
-      if (!Number.isFinite(finalP) || finalP <= 0) return false;
-      if (ownedSet.has(Number(o.id))) return false;
-      return true;
-    })
-    .sort((a, b) => (b.discountPercent - a.discountPercent) || (a.discountPrice - b.discountPrice));
+  const matches = (Array.isArray(offers) ? offers : []).filter((o) => {
+    if (!o || !o.id || !o.title) return false;
+    if (o.isFreeWeekend || o.isDemo || o.isFreeToPlay) return false;
+    const pct = Number(o.discountPercent ?? 0);
+    const orig = Number(o.originalPrice ?? 0);
+    const finalP = Number(o.discountPrice ?? 0);
+    if (!Number.isFinite(pct) || pct < minPct || pct >= 100) return false;
+    if (!Number.isFinite(orig) || orig <= 0) return false;
+    if (!Number.isFinite(finalP) || finalP <= 0) return false;
+    if (ownedSet.has(Number(o.id))) return false;
+    if (queryTokens.length > 0) {
+      const lowerTitle = o.title.toLowerCase();
+      if (!queryTokens.every((tok) => lowerTitle.includes(tok))) return false;
+    }
+    return true;
+  });
+
+  return matches.sort((a, b) => {
+    if (sortBy === 'popular') {
+      const aRank = Number.isFinite(a.topRank) ? a.topRank : Number.MAX_SAFE_INTEGER;
+      const bRank = Number.isFinite(b.topRank) ? b.topRank : Number.MAX_SAFE_INTEGER;
+      if (aRank !== bRank) return aRank - bRank;
+      const revDiff = (Number(b.reviewCount) || 0) - (Number(a.reviewCount) || 0);
+      if (revDiff !== 0) return revDiff;
+      return (b.discountPercent - a.discountPercent) || (a.discountPrice - b.discountPrice);
+    }
+    if (sortBy === 'reviews') {
+      const countDiff = (Number(b.reviewCount) || 0) - (Number(a.reviewCount) || 0);
+      if (countDiff !== 0) return countDiff;
+      const pctDiff = (Number(b.reviewPercent) || 0) - (Number(a.reviewPercent) || 0);
+      if (pctDiff !== 0) return pctDiff;
+      return b.discountPercent - a.discountPercent;
+    }
+    if (sortBy === 'price') {
+      return (
+        (a.discountPrice - b.discountPrice) ||
+        ((Number(b.reviewCount) || 0) - (Number(a.reviewCount) || 0)) ||
+        (b.discountPercent - a.discountPercent)
+      );
+    }
+    return (
+      (b.discountPercent - a.discountPercent) ||
+      (a.discountPrice - b.discountPrice) ||
+      ((Number(b.reviewCount) || 0) - (Number(a.reviewCount) || 0))
+    );
+  });
+}
+
+function buildSteamDealsPageUrl(baseEndpoint, { country, start = 0, count = 50, query = '' }) {
+  const url = new URL(
+    baseEndpoint ||
+      'https://store.steampowered.com/search/results/?query=&specials=1&category1=998&filter=topsellers&count=50&infinite=1&json=1'
+  );
+  url.searchParams.set('category1', '998');
+  url.searchParams.set('count', String(count));
+  url.searchParams.set('start', String(start));
+  url.searchParams.set('infinite', '1');
+  url.searchParams.set('json', '1');
+  if (country) {
+    url.searchParams.set('cc', country);
+  }
+  if (query) {
+    url.searchParams.delete('query');
+    // Omit specials=1 and filter=topsellers when searching by title because Steam's
+    // specials index excludes hybrid F2P/paid-edition entries (e.g. Battlefield 6).
+    url.searchParams.delete('specials');
+    url.searchParams.delete('filter');
+    url.searchParams.set('term', query);
+  } else {
+    url.searchParams.set('specials', '1');
+    url.searchParams.set('filter', 'topsellers');
+  }
+  return url.href;
+}
+
+async function fetchOwnedAppIds(endpoints, context, fetchFn) {
+  const existing = context.steamUserdata?.rgOwnedApps;
+  if (Array.isArray(existing)) return existing;
+  try {
+    const userdataUrl = endpoints.userdata || 'https://store.steampowered.com/dynamicstore/userdata/';
+    const uResp = await fetchFn(userdataUrl, { credentials: 'include', cache: 'no-store' });
+    if (uResp.ok) {
+      const uJson = await uResp.json();
+      if (context && typeof context === 'object') {
+        context.steamUserdata = uJson;
+      }
+      return uJson?.rgOwnedApps;
+    }
+  } catch {
+    // Optional ownership filter best-effort only
+  }
+  return null;
 }
 
 /**
- * Fetch current paid discounted specials from Steam (never auto-claimed; listed cleanly for user review).
- * @param {{ config?: object, region?: { country?: string }|null, minDiscount?: number, steamUserdata?: object, fetchFn?: typeof fetch }} [context]
+ * Fetch paid discounted Steam deals (paginated up to 250 Top Sellers, or live Steam search).
+ * Never auto-claimed; strictly for user browsing in the Deals tab.
+ * @param {{ config?: object, region?: { country?: string }|null, minDiscount?: number, query?: string, sortBy?: 'popular'|'reviews'|'discount'|'price', maxPages?: number, steamUserdata?: object, fetchFn?: typeof fetch }} [context]
  * @returns {Promise<object[]>}
  */
 export async function fetchSteamDeals(context = {}) {
+  const query = typeof context.query === 'string' ? context.query.trim() : '';
   const minDiscount = Number(context.minDiscount ?? 40);
   if (minDiscount >= 100) return [];
 
   const endpoints = context.config?.stores?.steam?.endpoints || {};
   const country = normalizeCountryCode(context.region?.country);
   const fetchFn = context.fetchFn || fetch;
-  const url = new URL(
-    endpoints.dealsSearch ||
-      'https://store.steampowered.com/search/results/?query=&specials=1&category1=998&count=50&infinite=1&json=1'
-  );
-  if (country) {
-    url.searchParams.set('cc', country);
-  }
+  const ownedIds = await fetchOwnedAppIds(endpoints, context, fetchFn);
+  const ownedSet = new Set(Array.isArray(ownedIds) ? ownedIds.map((x) => Number(x)) : []);
 
-  const resp = await fetchFn(url.href, {
-    method: 'GET',
-    headers: { Accept: 'application/json' },
-    credentials: 'include',
-    cache: 'no-store'
-  });
-  if (!resp.ok) {
-    throw new Error(`Steam deals request failed (${resp.status})`);
-  }
+  const pageSize = 50;
+  const maxPages = Math.max(1, Math.min(8, Number(context.maxPages || (query ? 2 : 5))));
+  const targetDeals = query ? 80 : 150;
+  const seenIds = new Set();
+  const collected = [];
+  let eligibleCount = 0;
 
-  const payload = await resp.json();
-  const parsed = parseSteamSearchHtml(payload?.results_html || '', endpoints, { country });
+  for (let page = 0; page < maxPages; page += 1) {
+    const start = page * pageSize;
+    const pageUrl = buildSteamDealsPageUrl(endpoints.dealsSearch, {
+      country,
+      start,
+      count: pageSize,
+      query
+    });
 
-  let ownedIds = context.steamUserdata?.rgOwnedApps;
-  if (!Array.isArray(ownedIds)) {
+    let payload;
     try {
-      const userdataUrl = endpoints.userdata || 'https://store.steampowered.com/dynamicstore/userdata/';
-      const uResp = await fetchFn(userdataUrl, { credentials: 'include', cache: 'no-store' });
-      if (uResp.ok) {
-        const uJson = await uResp.json();
-        ownedIds = uJson?.rgOwnedApps;
-        if (context && typeof context === 'object') {
-          context.steamUserdata = uJson;
-        }
+      const resp = await fetchFn(pageUrl, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      if (!resp.ok) {
+        if (page === 0) throw new Error(`Steam deals request failed (${resp.status})`);
+        break;
       }
-    } catch {
-      // Optional ownership filter best-effort only
+      payload = await resp.json();
+    } catch (err) {
+      if (page === 0) throw err;
+      break;
+    }
+
+    const rawHtml = payload?.results_html || '';
+    const rawRowCount = (rawHtml.match(/search_result_row/gi) || []).length;
+    const parsed = parseSteamSearchHtml(rawHtml, endpoints, { country });
+    for (let i = 0; i < parsed.length; i += 1) {
+      const item = parsed[i];
+      if (!item?.id || seenIds.has(item.id)) continue;
+      seenIds.add(item.id);
+      const ranked = {
+        ...item,
+        topRank: start + i + 1
+      };
+      collected.push(ranked);
+      if (
+        !ranked.isFreeWeekend &&
+        !ranked.isDemo &&
+        !ranked.isFreeToPlay &&
+        ranked.discountPercent >= Math.max(40, minDiscount) &&
+        ranked.discountPercent < 100 &&
+        ranked.originalPrice > 0 &&
+        ranked.discountPrice > 0 &&
+        !ownedSet.has(Number(ranked.id))
+      ) {
+        eligibleCount += 1;
+      }
+    }
+
+    const totalCount = Number(payload?.total_count);
+    if (
+      rawRowCount < pageSize ||
+      (Number.isFinite(totalCount) && start + pageSize >= totalCount) ||
+      eligibleCount >= targetDeals
+    ) {
+      break;
     }
   }
 
-  return filterSteamDiscountDeals(parsed, Math.max(40, minDiscount), ownedIds).slice(0, 50);
+  return filterSteamDiscountDeals(collected, Math.max(40, minDiscount), ownedIds, {
+    sortBy: context.sortBy || 'popular'
+  }).slice(0, targetDeals);
 }
 
 /**
