@@ -170,7 +170,7 @@ export function parseSteamSearchHtml(resultsHtml, endpoints = {}, options = {}) 
     const appId = rawAppIds[0];
 
     const titleMatch = body.match(/<span[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
-    const imgMatch = body.match(/<div[^>]*class="[^"]*search_capsule[^"]*"[^>]*>\s*<img[^>]*src="([^"]+)"/i);
+    const imgMatch = body.match(/<div[^>]*class="[^"]*search_capsule[^"]*"[^>]*>[\s\S]*?<img[^>]*\b(?:src|data-src)=["']([^"']+)["']/i);
     const discountAttrMatch = body.match(/data-discount="(-?\d+)"/i);
     const finalPriceAttrMatch = body.match(/data-price-final="(\d+)"/i);
     const origPriceMatch = body.match(/<div[^>]*class="[^"]*discount_original_price[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
@@ -202,13 +202,17 @@ export function parseSteamSearchHtml(resultsHtml, endpoints = {}, options = {}) 
       : inferCurrencyFromCountry(country);
     const review = parseSteamReviewSummary(body);
 
+    const imageUrl = imgMatch
+      ? decodeHtmlEntities(imgMatch[1])
+      : `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_231x87.jpg`;
+
     offers.push({
       id: appId,
       store: id,
       storeName: name,
       title,
       url: cleanUrl,
-      image: imgMatch ? decodeHtmlEntities(imgMatch[1]) : '',
+      image: imageUrl,
       originalPrice,
       originalPriceFormatted: origFormatted,
       discountPrice,

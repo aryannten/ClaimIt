@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {
   isAllowedStoreUrl,
+  isAllowedImageUrl,
   isAllowedStoreEndpointUrl,
   isAllowedDiscordWebhookUrl
 } from '../src/url-validator.js';
@@ -41,6 +42,19 @@ describe('URL allowlists', () => {
     assert.equal(isAllowedStoreUrl('https://evil.example.com/claim'), false);
     assert.equal(isAllowedStoreUrl(''), false);
     assert.equal(isAllowedStoreUrl(null), false);
+  });
+
+  it('allows Epic/Steam CDN cover image URLs while blocking non-HTTPS and untrusted hosts', () => {
+    assert.equal(
+      isAllowedImageUrl('https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/815370/capsule_231x87.jpg'),
+      true
+    );
+    assert.equal(isAllowedImageUrl('https://cdn1.epicgames.com/offer/abc/wide.jpg'), true);
+    assert.equal(isAllowedImageUrl('https://cdn2.unrealengine.com/img.png'), true);
+    assert.equal(isAllowedImageUrl('http://shared.akamai.steamstatic.com/img.jpg'), false);
+    assert.equal(isAllowedImageUrl('https://steamstatic.com.evil.com/img.jpg'), false);
+    assert.equal(isAllowedImageUrl('https://evil.example.com/img.jpg'), false);
+    assert.equal(isAllowedImageUrl('data:image/png;base64,AAA'), false);
   });
 
   it('validates Discord webhook URLs strictly by host and webhook path', () => {
