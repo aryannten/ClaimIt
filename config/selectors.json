@@ -11,6 +11,7 @@
       },
       "selectors": {
         "getButton": [
+          "button[class*='_sidebarBuyButton_']",
           "button[data-testid='purchase-cta-button']",
           "button[data-testid='add-to-cart-button']",
           "[data-testid='purchase-cta-button']"
@@ -50,6 +51,7 @@
           "#hcaptcha-container"
         ],
         "ownedIndicator": [
+          "button[class*='_sidebarBuyButton_']",
           "[data-testid='purchase-cta-button']"
         ],
         "regionUnavailableIndicator": [
@@ -61,13 +63,14 @@
           "h2"
         ],
         "loginIndicator": [
+          "a[aria-label='Sign in']",
+          "[role='banner'] a[href*='/login']",
           "[data-testid='user-menu']",
-          "a[href*='/login']",
           "#login-button"
         ]
       },
       "texts": {
-        "getButton": ["get", "free", "claim"],
+        "getButton": ["get", "claim"],
         "placeOrderButton": ["place order", "confirm order", "complete order"],
         "euAgreeButton": ["i agree", "accept", "agree"],
         "owned": ["in library", "owned"],

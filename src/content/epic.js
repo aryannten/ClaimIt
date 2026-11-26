@@ -56,6 +56,19 @@
     return null;
   }
 
+  function findButtonByExactText(textFilters = [], root = document) {
+    const targets = new Set(textFilters.map((p) => String(p).trim().toLowerCase()).filter(Boolean));
+    if (targets.size === 0) return null;
+    const buttons = Array.from(root.querySelectorAll('button, a[role="button"]'));
+    for (const btn of buttons) {
+      if (!isVisible(btn)) continue;
+      if (targets.has(normText(btn))) {
+        return btn;
+      }
+    }
+    return null;
+  }
+
   function getCheckoutRoot(selectors = {}) {
     if (window !== window.top) return document;
     const container = findFirstVisible(selectors.checkoutContainer || ['#webPurchaseContainer', '#purchase-app']);
@@ -105,17 +118,20 @@
 
     const getBtn =
       findFirstVisible(selectors.getButton || [], texts.getButton || []) ||
+      findButtonByExactText(texts.getButton || []) ||
       findFirstVisible(selectors.getButton || []);
 
-    const ownedBtn = findFirstVisible(selectors.ownedIndicator || [], texts.owned || []);
+    const ownedBtn =
+      findFirstVisible(selectors.ownedIndicator || [], texts.owned || []) ||
+      findButtonByExactText(texts.owned || []);
     const owned = Boolean(ownedBtn) || (getBtn ? matchesAnyText(normText(getBtn), texts.owned || []) : false);
 
     const loginEl = findFirstVisible(selectors.loginIndicator || [], texts.loginRequired || []);
     const ctaLogin = getBtn ? matchesAnyText(normText(getBtn), texts.loginRequired || []) : false;
-    const loginRequired = ctaLogin || (Boolean(loginEl) && !getBtn && !owned);
+    const loginRequired = ctaLogin || (Boolean(loginEl) && !owned);
 
     const hasGetButton = Boolean(
-      getBtn && !owned && !ctaLogin && matchesAnyText(normText(getBtn), texts.getButton || [])
+      getBtn && !owned && !loginRequired && matchesAnyText(normText(getBtn), texts.getButton || [])
     );
     const hasCheckoutContainer = Boolean(
       findFirstVisible(selectors.checkoutContainer || ['#webPurchaseContainer', '#purchase-app']) ||
@@ -141,6 +157,7 @@
     const texts = config.texts || {};
     const btn =
       findFirstVisible(selectors.getButton || [], texts.getButton || []) ||
+      findButtonByExactText(texts.getButton || []) ||
       findButtonByText(texts.getButton || []);
 
     if (!btn) {

@@ -22,7 +22,8 @@ import {
   getRegionState,
   saveRegionState,
   getCachedFxRates,
-  setCachedFxRates
+  setCachedFxRates,
+  saveAccountState
 } from './storage.js';
 import {
   resolveRegionAndCurrency,
@@ -370,6 +371,12 @@ async function runCheckCycleInternal(options = {}) {
           alreadyOwned: Boolean(result.alreadyOwned)
         });
 
+        if (result.status === CLAIM_STATUS.CLAIMED) {
+          await saveAccountState(offer.store, { signedIn: true });
+        } else if (result.status === CLAIM_STATUS.NEEDS_USER && /login/i.test(result.reason || '')) {
+          await saveAccountState(offer.store, { signedIn: false });
+        }
+
         if (result.status === CLAIM_STATUS.CLAIMED && snap.dryRun) {
           await logger.info('engine', `Dry-run completed for ${offer.title}`, {
             store: offer.store,
@@ -468,6 +475,12 @@ export async function claimSingleOffer(storeId, offerId) {
     dryRun: Boolean(result.dryRun || (settings.dryRun && result.status === CLAIM_STATUS.CLAIMED)),
     alreadyOwned: Boolean(result.alreadyOwned)
   });
+
+  if (result.status === CLAIM_STATUS.CLAIMED) {
+    await saveAccountState(offer.store, { signedIn: true });
+  } else if (result.status === CLAIM_STATUS.NEEDS_USER && /login/i.test(result.reason || '')) {
+    await saveAccountState(offer.store, { signedIn: false });
+  }
 
   if (!(result.status === CLAIM_STATUS.CLAIMED && snap.dryRun)) {
     await upsertHistoryEntry(snap);

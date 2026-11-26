@@ -27,7 +27,7 @@ ClaimIt is a Chrome Manifest V3 extension that watches Epic Games Store and Stea
 3. Click **Load unpacked** and select the `claimit-extension` folder.
 4. Pin the ClaimIt icon to your toolbar to see current offers and recent claims.
 
-Sign in to Epic Games Store and Steam in the same browser profile so ClaimIt can use your sessions.
+Sign in to Epic Games Store and Steam using the **Sign in** buttons in the ClaimIt popup (or directly in Chrome); once signed in, ClaimIt automatically checks and claims eligible giveaways.
 
 A Chrome Web Store listing is not published yet.
 
