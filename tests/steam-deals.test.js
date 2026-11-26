@@ -91,7 +91,17 @@ describe('Steam discount deals filter & slider range', () => {
     assert.equal(parsed[0].discountPrice, 1249);
     assert.equal(parsed[0].discountPercent, 75);
     assert.equal(parsed[0].currencyCode, 'INR');
+    assert.equal(parsed[0].image, 'https://shared.fastly.steamstatic.com/rdr2.jpg');
     assert.equal(parsed[3].discountPrice, 1040);
+
+    // Omitted <img> tag still falls back to Steam CDN capsule URL for the appId
+    const fallbackOffer = parseSteamSearchHtml(
+      '<a href="https://store.steampowered.com/app/555111/NoImg/" data-ds-appid="555111" class="search_result_row"><span class="title">NoImg</span></a>'
+    )[0];
+    assert.equal(
+      fallbackOffer.image,
+      'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/555111/capsule_231x87.jpg'
+    );
 
     // Free classifier still strictly rejects all <100% paid discounts
     const { eligible } = classifyOffers(parsed);

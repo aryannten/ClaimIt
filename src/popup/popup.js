@@ -25,7 +25,7 @@ import {
 } from '../currency.js';
 import { CLAIM_STATUS } from '../providers/constants.js';
 import { logger } from '../logger.js';
-import { isAllowedStoreUrl } from '../url-validator.js';
+import { isAllowedStoreUrl, isAllowedImageUrl } from '../url-validator.js';
 import { startStoreSignIn } from '../accounts.js';
 import {
   createSvgUse,
@@ -100,6 +100,38 @@ let autoLoadedDealsOnce = false;
 
 function isSafeHttpsUrl(url) {
   return isAllowedStoreUrl(url);
+}
+
+function createCoverThumbnail(item) {
+  const candidates = [];
+  if (isAllowedImageUrl(item?.image)) {
+    candidates.push(item.image);
+  }
+  const steamId = String(item?.id || '');
+  if (item?.store === 'steam' && /^\d+$/.test(steamId)) {
+    for (const variant of ['capsule_231x87.jpg', 'header.jpg']) {
+      const url = `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${steamId}/${variant}`;
+      if (!candidates.includes(url)) candidates.push(url);
+    }
+  }
+  candidates.push(COVER_FALLBACK);
+
+  let idx = 0;
+  const img = document.createElement('img');
+  img.className = 'offer-thumb';
+  img.width = 84;
+  img.height = 48;
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  img.src = candidates[0];
+  img.alt = item?.title ? `${item.title} cover` : 'Game cover';
+  img.addEventListener('error', () => {
+    idx += 1;
+    if (idx < candidates.length) {
+      img.src = candidates[idx];
+    }
+  });
+  return img;
 }
 
 async function openStoreTab(url) {
@@ -205,19 +237,7 @@ function formatHumanReason(item) {
 function createOfferRow(item, mode, isChecking, priceContext) {
   const row = document.createElement('article');
   row.className = 'offer-row';
-
-  const img = document.createElement('img');
-  img.className = 'offer-thumb';
-  img.width = 76;
-  img.height = 44;
-  img.src = isSafeHttpsUrl(item.image) ? item.image : COVER_FALLBACK;
-  img.alt = item.title ? `${item.title} cover` : 'Game cover';
-  img.addEventListener('error', () => {
-    if (!img.src.endsWith('cover-fallback.svg')) {
-      img.src = COVER_FALLBACK;
-    }
-  });
-  row.appendChild(img);
+  row.appendChild(createCoverThumbnail(item));
 
   const main = document.createElement('div');
   main.className = 'offer-main';
@@ -497,19 +517,7 @@ function formatDiscountLabel(minDiscount) {
 function createDealRow(item, priceContext) {
   const row = document.createElement('article');
   row.className = 'offer-row';
-
-  const img = document.createElement('img');
-  img.className = 'offer-thumb';
-  img.width = 76;
-  img.height = 44;
-  img.src = isSafeHttpsUrl(item.image) ? item.image : COVER_FALLBACK;
-  img.alt = item.title ? `${item.title} cover` : 'Game cover';
-  img.addEventListener('error', () => {
-    if (!img.src.endsWith('cover-fallback.svg')) {
-      img.src = COVER_FALLBACK;
-    }
-  });
-  row.appendChild(img);
+  row.appendChild(createCoverThumbnail(item));
 
   const main = document.createElement('div');
   main.className = 'offer-main';

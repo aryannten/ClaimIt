@@ -23,7 +23,7 @@ import {
   normalizeCurrencyCode
 } from './currency.js';
 import { logger, redactSecrets } from './logger.js';
-import { isAllowedStoreUrl, isAllowedDiscordWebhookUrl } from './url-validator.js';
+import { isAllowedStoreUrl, isAllowedImageUrl, isAllowedDiscordWebhookUrl } from './url-validator.js';
 
 const TARGETS_STORAGE_KEY = 'claimit_notification_targets';
 const MAX_IMAGE_BYTES = 1_500_000;
@@ -260,8 +260,7 @@ export function buildDiscordPayload(offer, status, reason, currencyContext = nul
   const isNeedsUser = status === CLAIM_STATUS.NEEDS_USER;
 
   const safeUrl = isAllowedStoreUrl(offer.url) ? offer.url : undefined;
-  const safeImage =
-    typeof offer.image === 'string' && offer.image.startsWith('https://') ? offer.image : undefined;
+  const safeImage = isAllowedImageUrl(offer.image) ? offer.image : undefined;
 
   return {
     username: 'ClaimIt',

@@ -357,7 +357,7 @@ body {
 
 .offer-row {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr) auto;
+  grid-template-columns: 84px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: var(--sp-3);
@@ -374,8 +374,8 @@ body {
 }
 
 .offer-thumb {
-  width: 76px;
-  height: 44px;
+  width: 84px;
+  height: 48px;
   border-radius: var(--radius-md);
   object-fit: cover;
   background: url('../../assets/cover-fallback.svg') center / cover no-repeat, var(--surface-raised);
@@ -472,7 +472,7 @@ body {
 
 .skeleton-row {
   display: grid;
-  grid-template-columns: 76px 1fr;
+  grid-template-columns: 84px 1fr;
   align-items: center;
   gap: 10px;
   padding: var(--sp-3);
@@ -489,8 +489,8 @@ body {
 }
 
 .skel-thumb {
-  width: 76px;
-  height: 44px;
+  width: 84px;
+  height: 48px;
 }
 
 .skel-lines {

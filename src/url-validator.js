@@ -11,6 +11,22 @@ const ALLOWED_STORE_HOSTS = new Set([
   'steamdb.info'
 ]);
 
+const ALLOWED_IMAGE_EXACT_HOSTS = new Set([
+  ...ALLOWED_STORE_HOSTS,
+  'steamcdn-a.akamaihd.net',
+  'steamstatic.com',
+  'epicgames.com',
+  'unrealengine.com',
+  'epicgames.dev'
+]);
+
+const ALLOWED_IMAGE_HOST_SUFFIXES = [
+  '.steamstatic.com',
+  '.epicgames.com',
+  '.unrealengine.com',
+  '.epicgames.dev'
+];
+
 const ALLOWED_STORE_ENDPOINT_HOSTS = {
   epic: new Set([
     'store-site-backend-static-ipv4.ak.epicgames.com',
@@ -52,6 +68,20 @@ function parseSafeHttpsUrl(url) {
 export function isAllowedStoreUrl(url) {
   const parsed = parseSafeHttpsUrl(url);
   return Boolean(parsed && ALLOWED_STORE_HOSTS.has(parsed.hostname));
+}
+
+/**
+ * Return true only if the URL is HTTPS (without credentials) and points to an
+ * official Epic or Steam storefront/CDN image hostname.
+ * @param {string|null|undefined} url
+ * @returns {boolean}
+ */
+export function isAllowedImageUrl(url) {
+  const parsed = parseSafeHttpsUrl(url);
+  if (!parsed) return false;
+  const host = parsed.hostname.toLowerCase();
+  if (ALLOWED_IMAGE_EXACT_HOSTS.has(host)) return true;
+  return ALLOWED_IMAGE_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
 }
 
 /**
