@@ -21,7 +21,9 @@ export const STORAGE_KEYS = {
   REMOTE_CONFIG_CACHE: 'claimit_remote_config_cache',
   NOTIFICATION_STATE: 'claimit_notification_state',
   REGION: 'claimit_region',
-  FX_RATES: 'claimit_fx_rates'
+  FX_RATES: 'claimit_fx_rates',
+  ACCOUNTS: 'claimit_accounts',
+  PENDING_SIGNIN: 'claimit_pending_signin'
 };
 
 const CYCLE_LOCK_TTL_MS = 5 * 60 * 1000;
@@ -487,4 +489,63 @@ export async function getCachedFxRates() {
 export async function setCachedFxRates(payload) {
   if (!hasChromeStorage()) return;
   await chrome.storage.local.set({ [STORAGE_KEYS.FX_RATES]: payload });
+}
+
+const DEFAULT_ACCOUNTS = {
+  epic: { signedIn: null, accountName: null, checkedAt: null },
+  steam: { signedIn: null, accountName: null, checkedAt: null }
+};
+
+export async function getAccountStates() {
+  if (!hasChromeStorage()) {
+    return {
+      epic: { ...DEFAULT_ACCOUNTS.epic },
+      steam: { ...DEFAULT_ACCOUNTS.steam }
+    };
+  }
+  const data = await chrome.storage.local.get(STORAGE_KEYS.ACCOUNTS);
+  const raw = data[STORAGE_KEYS.ACCOUNTS] && typeof data[STORAGE_KEYS.ACCOUNTS] === 'object'
+    ? data[STORAGE_KEYS.ACCOUNTS]
+    : {};
+  return {
+    epic: { ...DEFAULT_ACCOUNTS.epic, ...(raw.epic || {}) },
+    steam: { ...DEFAULT_ACCOUNTS.steam, ...(raw.steam || {}) }
+  };
+}
+
+export async function saveAccountState(storeId, partial = {}) {
+  if (storeId !== 'epic' && storeId !== 'steam') return null;
+  const current = await getAccountStates();
+  const next = {
+    ...current,
+    [storeId]: {
+      ...current[storeId],
+      signedIn:
+        partial.signedIn === undefined ? current[storeId].signedIn : (partial.signedIn === null ? null : Boolean(partial.signedIn)),
+      accountName:
+        partial.accountName === undefined ? current[storeId].accountName : (partial.accountName ? String(partial.accountName).slice(0, 64) : null),
+      checkedAt: new Date().toISOString()
+    }
+  };
+  if (hasChromeStorage()) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.ACCOUNTS]: next });
+  }
+  return next;
+}
+
+export async function getPendingSignIn() {
+  if (!hasChromeStorage()) return null;
+  const data = await chrome.storage.local.get(STORAGE_KEYS.PENDING_SIGNIN);
+  const raw = data[STORAGE_KEYS.PENDING_SIGNIN];
+  return raw && typeof raw === 'object' && typeof raw.tabId === 'number' ? raw : null;
+}
+
+export async function setPendingSignIn(info) {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.set({ [STORAGE_KEYS.PENDING_SIGNIN]: info });
+}
+
+export async function clearPendingSignIn() {
+  if (!hasChromeStorage()) return;
+  await chrome.storage.local.remove(STORAGE_KEYS.PENDING_SIGNIN);
 }

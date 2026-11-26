@@ -52,8 +52,8 @@
       <div class="panel">
         <div class="control-row">
           <div class="control-copy">
-            <label for="dryRunToggle">Dry-run mode</label>
-            <p class="helper">Walks through detection and checkout pages without clicking the final claim button.</p>
+            <label for="dryRunToggle">Test mode (Dry-run)</label>
+            <p class="helper">Off by default so auto-claim adds free games automatically. Turn on only to simulate without claiming.</p>
           </div>
           <label class="switch">
             <input id="dryRunToggle" name="dryRunToggle" type="checkbox" />
@@ -176,35 +176,10 @@
       </div>
     </section>
 
-    <section class="section" aria-labelledby="sec-log">
-      <div class="section-head-row">
-        <div>
-          <h1 id="sec-log">Log</h1>
-          <p class="helper">Last 50 activity events stored locally for troubleshooting.</p>
-        </div>
-        <div class="inline-actions">
-          <select id="logLevelFilter" aria-label="Filter log level" class="select select-sm">
-            <option value="all">All levels</option>
-            <option value="info">Info</option>
-            <option value="warn">Warnings</option>
-            <option value="error">Errors</option>
-            <option value="debug">Debug</option>
-          </select>
-          <button id="refreshLogsBtn" type="button" class="btn">
-            <svg class="icon" aria-hidden="true"><use href="../../assets/icons.svg#icon-refresh"></use></svg>
-            <span>Refresh</span>
-          </button>
-          <button id="copyLogsBtn" type="button" class="btn">Copy JSON</button>
-          <button id="clearLogsBtn" type="button" class="btn">Clear logs</button>
-        </div>
-      </div>
-      <div id="logsContainer" class="logs-box" role="log" aria-live="off"></div>
-    </section>
-
     <section class="section" aria-labelledby="sec-advanced">
       <div class="section-head">
         <h1 id="sec-advanced">Advanced</h1>
-        <p class="helper">Remote selector overrides and local history reset.</p>
+        <p class="helper">Remote selector overrides, local history reset, and internal diagnostics.</p>
       </div>
       <div class="panel">
         <div class="control-group">
@@ -226,6 +201,31 @@
           <button id="clearHistoryBtn" type="button" class="btn btn-danger">Clear history</button>
         </div>
       </div>
+
+      <details class="diagnostics-details">
+        <summary class="diagnostics-summary">
+          <span>Activity log (diagnostics)</span>
+          <span class="helper">Last 50 events for troubleshooting</span>
+        </summary>
+        <div class="diagnostics-body">
+          <div class="inline-actions diagnostics-toolbar">
+            <select id="logLevelFilter" aria-label="Filter log level" class="select select-sm">
+              <option value="all">All levels</option>
+              <option value="info">Info</option>
+              <option value="warn">Warnings</option>
+              <option value="error">Errors</option>
+              <option value="debug">Debug</option>
+            </select>
+            <button id="refreshLogsBtn" type="button" class="btn">
+              <svg class="icon" aria-hidden="true"><use href="../../assets/icons.svg#icon-refresh"></use></svg>
+              <span>Refresh</span>
+            </button>
+            <button id="copyLogsBtn" type="button" class="btn">Copy JSON</button>
+            <button id="clearLogsBtn" type="button" class="btn">Clear logs</button>
+          </div>
+          <div id="logsContainer" class="logs-box" role="log" aria-live="off"></div>
+        </div>
+      </details>
     </section>
   </main>
 

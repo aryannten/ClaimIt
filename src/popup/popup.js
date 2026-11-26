@@ -7,7 +7,8 @@ import {
   getRegionState,
   getCachedFxRates,
   setCachedFxRates,
-  computeValueSaved
+  computeValueSaved,
+  getAccountStates
 } from '../storage.js';
 import {
   resolveRegionAndCurrency,
@@ -35,7 +36,8 @@ const RELEVANT_STORAGE_KEYS = new Set([
   STORAGE_KEYS.CURRENT_OFFERS,
   STORAGE_KEYS.META,
   STORAGE_KEYS.REGION,
-  STORAGE_KEYS.FX_RATES
+  STORAGE_KEYS.FX_RATES,
+  STORAGE_KEYS.ACCOUNTS
 ]);
 
 const COVER_FALLBACK = '../../assets/cover-fallback.svg';
@@ -47,6 +49,7 @@ const els = {
   pauseBtnLabel: document.getElementById('pauseBtnLabel'),
   openOptionsBtn: document.getElementById('openOptionsBtn'),
   statusLine: document.getElementById('statusLine'),
+  accountsBar: document.getElementById('accountsBar'),
   checkNowBtn: document.getElementById('checkNowBtn'),
   checkNowLabel: document.getElementById('checkNowLabel'),
   freeCount: document.getElementById('freeCount'),
@@ -241,7 +244,16 @@ function createOfferRow(item, mode, isChecking, priceContext) {
   actions.className = 'offer-actions';
 
   if (mode !== 'claimed' && (item.status === CLAIM_STATUS.NEEDS_USER || item.status === CLAIM_STATUS.FAILED)) {
-    if (isSafeHttpsUrl(item.url)) {
+    if (/login/i.test(item.reason || '') && (item.store === 'epic' || item.store === 'steam')) {
+      const signInBtn = document.createElement('button');
+      signInBtn.type = 'button';
+      signInBtn.className = 'btn btn-primary';
+      signInBtn.textContent = 'Sign in & claim';
+      signInBtn.addEventListener('click', () => {
+        sendRuntimeMessage({ type: 'CLAIMIT_SIGN_IN', store: item.store });
+      });
+      actions.appendChild(signInBtn);
+    } else if (isSafeHttpsUrl(item.url)) {
       const openBtn = document.createElement('button');
       openBtn.type = 'button';
       openBtn.className = 'btn btn-primary';
@@ -390,8 +402,51 @@ async function triggerCheck() {
   }
 }
 
+function renderAccountsBar(accounts) {
+  if (!els.accountsBar) return;
+  els.accountsBar.replaceChildren();
+  const stores = [
+    { id: 'epic', label: 'Epic' },
+    { id: 'steam', label: 'Steam' }
+  ];
+
+  for (const store of stores) {
+    const acc = accounts?.[store.id] || {};
+    const pill = document.createElement('div');
+    pill.className = 'account-pill';
+
+    const left = document.createElement('div');
+    left.className = 'account-id';
+    left.appendChild(createSvgUse(`store-${store.id}`, 'store-tile', 'stores.svg'));
+    const nameEl = document.createElement('span');
+    nameEl.className = 'account-name';
+    nameEl.textContent = acc.signedIn === true && acc.accountName ? acc.accountName : store.label;
+    nameEl.title = acc.signedIn === true ? `${store.label} signed in` : `${store.label} session`;
+    left.appendChild(nameEl);
+    pill.appendChild(left);
+
+    if (acc.signedIn === true) {
+      const okBadge = document.createElement('span');
+      okBadge.className = 'badge badge-claimed';
+      okBadge.textContent = 'Signed in';
+      pill.appendChild(okBadge);
+    } else {
+      const signInBtn = document.createElement('button');
+      signInBtn.type = 'button';
+      signInBtn.className = 'btn btn-primary btn-account';
+      signInBtn.textContent = 'Sign in';
+      signInBtn.addEventListener('click', () => {
+        sendRuntimeMessage({ type: 'CLAIMIT_SIGN_IN', store: store.id });
+      });
+      pill.appendChild(signInBtn);
+    }
+
+    els.accountsBar.appendChild(pill);
+  }
+}
+
 async function render() {
-  const [settings, historyMap, currentOffers, meta, storedRegion, cachedFx, alarm, logs] = await Promise.all([
+  const [settings, historyMap, currentOffers, meta, storedRegion, cachedFx, alarm, logs, accounts] = await Promise.all([
     getSettings(),
     getHistory(),
     getCurrentOffers(),
@@ -399,8 +454,10 @@ async function render() {
     getRegionState(),
     getCachedFxRates(),
     chrome.alarms?.get ? chrome.alarms.get('claimit_check_alarm').catch(() => null) : Promise.resolve(null),
-    logger.getAll().catch(() => [])
+    logger.getAll().catch(() => []),
+    getAccountStates()
   ]);
+  renderAccountsBar(accounts);
 
   const region = resolveRegionAndCurrency({ settings, storedRegion });
   const allHistory = Object.values(historyMap);
@@ -665,6 +722,7 @@ chrome.storage?.onChanged?.addListener((changes, areaName) => {
 });
 
 scheduleRender();
+sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_ACCOUNTS' });
 
 const countdownRefreshTimer = window.setInterval(() => {
   scheduleRender();

@@ -90,11 +90,17 @@ h2 {
 
 .store-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 136px auto;
+  grid-template-columns: minmax(0, 1fr) auto 136px auto;
   align-items: center;
   gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--border);
+}
+
+.store-account-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
 }
 
 .store-row:last-child {
@@ -343,6 +349,40 @@ h2 {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text);
+}
+
+.diagnostics-details {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.diagnostics-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.diagnostics-summary::-webkit-details-marker {
+  display: none;
+}
+
+.diagnostics-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4) var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+.diagnostics-toolbar {
+  padding-top: var(--sp-3);
 }
 
 .logs-box {

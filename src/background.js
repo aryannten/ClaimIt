@@ -21,6 +21,12 @@ import {
 import { focusTab } from './providers/tab-helpers.js';
 import { logger, redactSecrets } from './logger.js';
 import { isAllowedStoreUrl } from './url-validator.js';
+import {
+  startStoreSignIn,
+  refreshStoreSessions,
+  handleSignInTabUpdated,
+  handleSignInTabRemoved
+} from './accounts.js';
 
 export { CHECK_ALARM_NAME };
 
@@ -61,12 +67,28 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
   chrome.runtime.onInstalled.addListener(async (details) => {
     await logger.info('lifecycle', `Extension ${details.reason}`);
     await getSettings();
-    await syncScheduleOnStartup();
+    await refreshStoreSessions();
+    if (details.reason === 'install') {
+      await runCheckCycle({ trigger: 'install' });
+    } else {
+      await syncScheduleOnStartup();
+    }
   });
 
   chrome.runtime.onStartup.addListener(async () => {
     await logger.info('lifecycle', 'Browser startup schedule check');
+    await refreshStoreSessions();
     await syncScheduleOnStartup();
+  });
+
+  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    await handleSignInTabUpdated(tabId, changeInfo, tab, () =>
+      runCheckCycle({ trigger: 'login' })
+    );
+  });
+
+  chrome.tabs.onRemoved.addListener(async (tabId) => {
+    await handleSignInTabRemoved(tabId);
   });
 
   chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -102,6 +124,12 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
       switch (message?.type) {
         case 'CLAIMIT_RUN_CHECK':
           return runManualCheck();
+
+        case 'CLAIMIT_SIGN_IN':
+          return startStoreSignIn(message.store);
+
+        case 'CLAIMIT_REFRESH_ACCOUNTS':
+          return refreshStoreSessions();
 
         case 'CLAIMIT_CLAIM_ONE':
           if (

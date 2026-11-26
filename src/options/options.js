@@ -4,7 +4,8 @@ import {
   saveSettings,
   getRegionState,
   getCachedFxRates,
-  setCachedFxRates
+  setCachedFxRates,
+  getAccountStates
 } from '../storage.js';
 import {
   SUPPORTED_CURRENCIES,
@@ -88,13 +89,14 @@ async function sendBgMessage(payload) {
   }
 }
 
-function renderStores(settings) {
+function renderStores(settings, accounts) {
   els.storesList.replaceChildren();
   const providers = getAllProviders();
 
   for (const provider of providers) {
     const isStub = provider.stub === true;
     const storeCfg = settings.stores?.[provider.id] || { enabled: false, mode: 'notify' };
+    const acc = accounts?.[provider.id];
 
     const row = document.createElement('div');
     row.className = `store-row${isStub ? ' stub' : ''}`;
@@ -112,6 +114,33 @@ function renderStores(settings) {
     helper.textContent = STORE_HELPERS[provider.id] || 'Store automation provider.';
     textCol.append(nameEl, helper);
     idWrap.appendChild(textCol);
+
+    const accountCell = document.createElement('div');
+    accountCell.className = 'store-account-cell';
+    if (!isStub) {
+      if (acc?.signedIn === true) {
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-claimed';
+        badge.textContent = acc.accountName || 'Signed in';
+        const switchBtn = document.createElement('button');
+        switchBtn.type = 'button';
+        switchBtn.className = 'btn btn-ghost';
+        switchBtn.textContent = 'Reconnect';
+        switchBtn.addEventListener('click', () => {
+          sendBgMessage({ type: 'CLAIMIT_SIGN_IN', store: provider.id });
+        });
+        accountCell.append(badge, switchBtn);
+      } else {
+        const signInBtn = document.createElement('button');
+        signInBtn.type = 'button';
+        signInBtn.className = 'btn btn-primary';
+        signInBtn.textContent = 'Sign in';
+        signInBtn.addEventListener('click', () => {
+          sendBgMessage({ type: 'CLAIMIT_SIGN_IN', store: provider.id });
+        });
+        accountCell.appendChild(signInBtn);
+      }
+    }
 
     const modeSelect = document.createElement('select');
     modeSelect.className = 'select';
@@ -157,7 +186,7 @@ function renderStores(settings) {
     track.setAttribute('aria-hidden', 'true');
     switchLabel.append(toggle, track);
 
-    row.append(idWrap, modeSelect, switchLabel);
+    row.append(idWrap, accountCell, modeSelect, switchLabel);
     els.storesList.appendChild(row);
   }
 }
@@ -218,10 +247,13 @@ async function renderLogs(locale) {
 }
 
 async function hydrate() {
-  const settings = await getSettings();
-  const storedRegion = await getRegionState();
+  const [settings, storedRegion, accounts] = await Promise.all([
+    getSettings(),
+    getRegionState(),
+    getAccountStates()
+  ]);
   const region = resolveRegionAndCurrency({ settings, storedRegion });
-  renderStores(settings);
+  renderStores(settings, accounts);
   renderCurrencyControl(settings, region);
 
   els.dryRunToggle.checked = Boolean(settings.dryRun);
@@ -440,12 +472,14 @@ els.clearLogsBtn.addEventListener('click', async () => {
 
 chrome.storage?.onChanged?.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
-  if (changes[STORAGE_KEYS.REGION] || changes[STORAGE_KEYS.SETTINGS]) {
-    Promise.all([getSettings(), getRegionState()]).then(([settings, storedRegion]) => {
+  if (changes[STORAGE_KEYS.REGION] || changes[STORAGE_KEYS.SETTINGS] || changes[STORAGE_KEYS.ACCOUNTS]) {
+    Promise.all([getSettings(), getRegionState(), getAccountStates()]).then(([settings, storedRegion, accounts]) => {
       const region = resolveRegionAndCurrency({ settings, storedRegion });
+      renderStores(settings, accounts);
       renderCurrencyControl(settings, region);
     });
   }
 });
 
 hydrate();
+sendBgMessage({ type: 'CLAIMIT_REFRESH_ACCOUNTS' });

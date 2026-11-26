@@ -16,7 +16,7 @@ ClaimIt **does not** collect, transmit to developer servers, sell, or share:
 All extension state is stored strictly inside your browser's `chrome.storage.local` storage:
 - **Preferences (`claimit_settings`)**: Enabled stores, claim modes (`auto` / `notify`), dry-run mode, pause flag, selected currency, optional remote selector URL, and any Telegram Bot token / Chat ID or Discord Webhook URL you explicitly enter.
 - **Claim history and snapshots (`claimit_history`, `claimit_current_offers`, `claimit_notification_state`)**: Game titles, store IDs, URLs, original prices, currencies, claim status, and timestamps (history is capped at 500 entries).
-- **Schedule and region metadata (`claimit_meta`, `claimit_region`, `claimit_fx_rates`)**: Last/next scan timestamps, detected store/browser currency & country code, and a 24-hour cache of public exchange rates.
+- **Schedule, account status, and region metadata (`claimit_meta`, `claimit_accounts`, `claimit_region`, `claimit_fx_rates`)**: Last/next scan timestamps, whether Epic/Steam sessions are connected (never passwords or tokens), detected store/browser currency & country code, and a 24-hour cache of public exchange rates.
 - **Troubleshooting logs (`claimit_logs`)**: Up to 50 recent structured events (bot tokens and webhook secrets are automatically redacted).
 
 You can delete claim history, cached offers, and logs at any time from **Settings -> Log -> Clear logs** and **Settings -> Advanced -> Clear history**, or remove everything by uninstalling the extension.
