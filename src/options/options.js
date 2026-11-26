@@ -17,6 +17,7 @@ import {
 import { getAllProviders } from '../providers/index.js';
 import { logger } from '../logger.js';
 import { createSvgUse, createIllustration } from '../ui/ui-helpers.js';
+import { startStoreSignIn } from '../accounts.js';
 
 const STORE_HELPERS = {
   epic: 'Checks weekly free promotions and claims via Epic store checkout.',
@@ -92,6 +93,14 @@ async function sendBgMessage(payload) {
   }
 }
 
+async function triggerOptionsSignIn(storeId) {
+  try {
+    await startStoreSignIn(storeId);
+  } catch (err) {
+    flashStatus(err instanceof Error ? err.message : String(err), true);
+  }
+}
+
 function renderStores(settings, accounts) {
   els.storesList.replaceChildren();
   const providers = getAllProviders();
@@ -130,7 +139,7 @@ function renderStores(settings, accounts) {
         switchBtn.className = 'btn btn-ghost';
         switchBtn.textContent = 'Reconnect';
         switchBtn.addEventListener('click', () => {
-          sendBgMessage({ type: 'CLAIMIT_SIGN_IN', store: provider.id });
+          triggerOptionsSignIn(provider.id);
         });
         accountCell.append(badge, switchBtn);
       } else {
@@ -139,7 +148,7 @@ function renderStores(settings, accounts) {
         signInBtn.className = 'btn btn-primary';
         signInBtn.textContent = 'Sign in';
         signInBtn.addEventListener('click', () => {
-          sendBgMessage({ type: 'CLAIMIT_SIGN_IN', store: provider.id });
+          triggerOptionsSignIn(provider.id);
         });
         accountCell.appendChild(signInBtn);
       }
