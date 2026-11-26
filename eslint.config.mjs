@@ -116,5 +116,21 @@ export default [
       }
     },
     rules: baseRules
+  },
+  {
+    files: ['scripts/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'module',
+      globals: {
+        Buffer: 'readonly',
+        console: 'readonly',
+        process: 'readonly'
+      }
+    },
+    rules: {
+      ...baseRules,
+      'no-console': 'off'
+    }
   }
 ];
