@@ -183,13 +183,15 @@ Manual Chrome/Brave verification steps are documented in [TESTING.md](TESTING.md
 2. Register it in `src/providers/index.js` and add default settings in `src/storage.js` plus UI helper copy in `src/options/options.js` and `assets/stores.svg`.
 3. Add only the minimum required host permission in `manifest.json`, update endpoint/tab allowlists in `src/url-validator.js` and `src/remote-config.js`, and add unit tests in `tests/`.
 
-## Contributing
+## Feedback and Bug Reports
 
-Issues and pull requests are welcome, especially store selector updates in `config/selectors.json` and implementations for the planned store stubs. Please run `npm run lint` and `npm test` before submitting changes, and avoid introducing emojis or runtime dependencies.
+Bug reports, broken selector notifications for `config/selectors.json`, and feature requests are welcome via GitHub Issues. Please run `npm run lint` and `npm test` if reporting or diagnosing issues locally, and note that this codebase is not licensed for third-party redistribution or derivative works.
 
 ## License
 
-Licensed under the [MIT License](LICENSE).
+Copyright (c) 2026 [aryannten](https://github.com/aryannten). All rights reserved.
+
+Source code is viewable on GitHub and the unmodified extension may be used strictly for personal, non-commercial use. Modifications, redistribution, and commercial use are not permitted without prior written permission. See [LICENSE](LICENSE) for full terms.
 
 ## Acknowledgements
 
