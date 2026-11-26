@@ -39,7 +39,7 @@ const ALLOWED_STORE_KEYS = {
     ])
   },
   steam: {
-    endpoints: new Set(['searchResults', 'userdata', 'appBase', 'steamdbFree']),
+    endpoints: new Set(['searchResults', 'dealsSearch', 'userdata', 'appBase', 'steamdbFree']),
     selectors: new Set([
       'purchaseContainer',
       'addToAccountButton',

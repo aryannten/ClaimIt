@@ -5,7 +5,8 @@ import {
   getRegionState,
   getCachedFxRates,
   setCachedFxRates,
-  getAccountStates
+  getAccountStates,
+  clampSteamMinDiscount
 } from '../storage.js';
 import {
   SUPPORTED_CURRENCIES,
@@ -33,6 +34,8 @@ const els = {
   detectedRegionText: document.getElementById('detectedRegionText'),
   changeCurrencyBtn: document.getElementById('changeCurrencyBtn'),
   dryRunToggle: document.getElementById('dryRunToggle'),
+  steamDiscountSlider: document.getElementById('steamDiscountSlider'),
+  steamDiscountValue: document.getElementById('steamDiscountValue'),
   chromeNotifToggle: document.getElementById('chromeNotifToggle'),
   telegramEnabled: document.getElementById('telegramEnabled'),
   telegramBotToken: document.getElementById('telegramBotToken'),
@@ -246,6 +249,16 @@ async function renderLogs(locale) {
   }
 }
 
+function renderSteamDiscountControl(minDiscount) {
+  const val = clampSteamMinDiscount(minDiscount);
+  if (els.steamDiscountSlider && document.activeElement !== els.steamDiscountSlider) {
+    els.steamDiscountSlider.value = String(val);
+  }
+  if (els.steamDiscountValue) {
+    els.steamDiscountValue.textContent = val >= 100 ? '100% (Free only)' : `${val}%+ off`;
+  }
+}
+
 async function hydrate() {
   const [settings, storedRegion, accounts] = await Promise.all([
     getSettings(),
@@ -255,6 +268,7 @@ async function hydrate() {
   const region = resolveRegionAndCurrency({ settings, storedRegion });
   renderStores(settings, accounts);
   renderCurrencyControl(settings, region);
+  renderSteamDiscountControl(settings.steamMinDiscount);
 
   els.dryRunToggle.checked = Boolean(settings.dryRun);
   els.chromeNotifToggle.checked = settings.notifications?.chrome !== false;
@@ -344,6 +358,19 @@ els.changeCurrencyBtn.addEventListener('click', async () => {
 
 els.dryRunToggle.addEventListener('change', async () => {
   await saveSettings({ dryRun: els.dryRunToggle.checked });
+  flashStatus('Saved');
+});
+
+els.steamDiscountSlider?.addEventListener('input', () => {
+  renderSteamDiscountControl(els.steamDiscountSlider.value);
+});
+
+els.steamDiscountSlider?.addEventListener('change', async () => {
+  const val = clampSteamMinDiscount(els.steamDiscountSlider.value);
+  await saveSettings({ steamMinDiscount: val });
+  if (val < 100) {
+    await sendBgMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
+  }
   flashStatus('Saved');
 });
 
@@ -477,6 +504,7 @@ chrome.storage?.onChanged?.addListener((changes, areaName) => {
       const region = resolveRegionAndCurrency({ settings, storedRegion });
       renderStores(settings, accounts);
       renderCurrencyControl(settings, region);
+      renderSteamDiscountControl(settings.steamMinDiscount);
     });
   }
 });

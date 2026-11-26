@@ -7,6 +7,7 @@
 import { classifyOffers } from './classifier.js';
 import { getSelectorsConfig } from './remote-config.js';
 import { getEnabledProviders, getProvider } from './providers/index.js';
+import { fetchSteamDeals } from './providers/steam.js';
 import { CLAIM_STATUS, humanDelay } from './providers/constants.js';
 import {
   getSettings,
@@ -23,7 +24,8 @@ import {
   saveRegionState,
   getCachedFxRates,
   setCachedFxRates,
-  saveAccountState
+  saveAccountState,
+  setSteamDeals
 } from './storage.js';
 import {
   resolveRegionAndCurrency,
@@ -408,6 +410,26 @@ async function runCheckCycleInternal(options = {}) {
     const finishedMs = typeof deps.nowMs === 'function' ? deps.nowMs() : Date.now();
     const finishedIso = new Date(finishedMs).toISOString();
     await saveCurrentOffersFn(snapshotOffers);
+
+    // Fetch paid Steam discounted specials (40-99%) strictly for user browsing (never auto-claimed)
+    const latestForDeals = await loadSettings();
+    const fetchDealsFn = deps.fetchSteamDeals || fetchSteamDeals;
+    if (latestForDeals.stores?.steam?.enabled && Number(latestForDeals.steamMinDiscount) < 100) {
+      try {
+        const steamDeals = await fetchDealsFn({
+          config,
+          region,
+          minDiscount: 40
+        });
+        await setSteamDeals(steamDeals);
+      } catch (err) {
+        await logger.warn('engine', 'Failed to refresh Steam discount deals', {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    } else if (Number(latestForDeals.steamMinDiscount) >= 100) {
+      await setSteamDeals([]);
+    }
     const metaBefore = await loadMetaFn();
     const shouldReschedule =
       trigger !== 'manual' ||
@@ -501,4 +523,23 @@ export async function claimSingleOffer(storeId, offerId) {
   });
 
   return result;
+}
+
+/**
+ * Refresh Steam's paid discount deals list on demand (e.g. when user lowers the % threshold).
+ */
+export async function refreshSteamDeals() {
+  const [settings, storedRegion, { config }] = await Promise.all([
+    getSettings(),
+    getRegionState(),
+    getSelectorsConfig()
+  ]);
+  if (!settings.stores?.steam?.enabled || Number(settings.steamMinDiscount) >= 100) {
+    await setSteamDeals([]);
+    return [];
+  }
+  const region = resolveRegionAndCurrency({ settings, storedRegion });
+  const deals = await fetchSteamDeals({ config, region, minDiscount: 40 });
+  await setSteamDeals(deals);
+  return deals;
 }

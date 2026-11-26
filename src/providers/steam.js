@@ -58,14 +58,21 @@ function parsePriceText(priceText) {
   const cleaned = text.replace(/[^\d.,]/g, '');
   if (!cleaned) return 0;
 
-  // Handle European comma decimal vs thousands separators
   const lastComma = cleaned.lastIndexOf(',');
   const lastDot = cleaned.lastIndexOf('.');
   let normalized = cleaned;
-  if (lastComma > lastDot) {
-    normalized = cleaned.replace(/\./g, '').replace(',', '.');
+  if (lastComma !== -1 && lastDot !== -1) {
+    normalized = lastComma > lastDot
+      ? cleaned.replace(/\./g, '').replace(',', '.')
+      : cleaned.replace(/,/g, '');
+  } else if (lastComma !== -1) {
+    const decimalsLen = cleaned.length - lastComma - 1;
+    // Thousands separator (e.g. ¥1,040 or ₹1,299 or ₹1,24,900) has 3 digits after comma
+    normalized = decimalsLen === 3 ? cleaned.replace(/,/g, '') : cleaned.replace(',', '.');
   } else {
-    normalized = cleaned.replace(/,/g, '');
+    // Dot-only string (e.g. €14.99 or Rp 10.000)
+    const dotGroups = cleaned.split('.');
+    normalized = dotGroups.length > 2 ? dotGroups.join('') : cleaned;
   }
   const parsed = Number.parseFloat(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -121,8 +128,11 @@ export function parseSteamSearchHtml(resultsHtml, endpoints = {}, options = {}) 
 
     const finalPriceCents = finalPriceAttrMatch ? Number(finalPriceAttrMatch[1]) : null;
     const originalPrice = parsePriceText(origFormatted);
+    const parsedFinalFormatted = finalFormatted ? parsePriceText(finalFormatted) : null;
     const discountPrice =
-      finalPriceCents !== null ? finalPriceCents / 100 : parsePriceText(finalFormatted);
+      parsedFinalFormatted !== null
+        ? parsedFinalFormatted
+        : (finalPriceCents !== null ? finalPriceCents / 100 : 0);
 
     const rawUrl = hrefMatch ? decodeHtmlEntities(hrefMatch[1]) : `${appBase}${appId}/`;
     const cleanUrl = rawUrl.split('?')[0];
@@ -141,6 +151,7 @@ export function parseSteamSearchHtml(resultsHtml, endpoints = {}, options = {}) 
       originalPrice,
       originalPriceFormatted: origFormatted,
       discountPrice,
+      discountPriceFormatted: finalFormatted,
       discountPercent,
       currencyCode,
       currency: currencyCode,
@@ -376,6 +387,91 @@ export async function fetchOffers(context = {}) {
     throw new Error(`Unknown Steam source: ${sourceKey}`);
   }
   return fetcher(endpoints, context.region || null);
+}
+
+/**
+ * Pure filter returning paid discounted Steam deals meeting `minDiscount` (40-99%).
+ * Never includes 100%-off items (handled separately for auto-claiming) or free-to-play titles.
+ * @param {object[]} offers
+ * @param {number} [minDiscount=40]
+ * @param {number[]|Set<number>|null} [ownedAppIds=null]
+ * @returns {object[]}
+ */
+export function filterSteamDiscountDeals(offers, minDiscount = 40, ownedAppIds = null) {
+  const threshold = Math.round(Number(minDiscount));
+  if (!Number.isFinite(threshold) || threshold >= 100) return [];
+  const minPct = Math.max(40, threshold);
+  const ownedSet = ownedAppIds instanceof Set
+    ? ownedAppIds
+    : new Set(Array.isArray(ownedAppIds) ? ownedAppIds.map((x) => Number(x)) : []);
+
+  return (Array.isArray(offers) ? offers : [])
+    .filter((o) => {
+      if (!o || !o.id || !o.title) return false;
+      if (o.isFreeWeekend || o.isDemo || o.isFreeToPlay) return false;
+      const pct = Number(o.discountPercent ?? 0);
+      const orig = Number(o.originalPrice ?? 0);
+      const finalP = Number(o.discountPrice ?? 0);
+      if (!Number.isFinite(pct) || pct < minPct || pct >= 100) return false;
+      if (!Number.isFinite(orig) || orig <= 0) return false;
+      if (!Number.isFinite(finalP) || finalP <= 0) return false;
+      if (ownedSet.has(Number(o.id))) return false;
+      return true;
+    })
+    .sort((a, b) => (b.discountPercent - a.discountPercent) || (a.discountPrice - b.discountPrice));
+}
+
+/**
+ * Fetch current paid discounted specials from Steam (never auto-claimed; listed cleanly for user review).
+ * @param {{ config?: object, region?: { country?: string }|null, minDiscount?: number, steamUserdata?: object, fetchFn?: typeof fetch }} [context]
+ * @returns {Promise<object[]>}
+ */
+export async function fetchSteamDeals(context = {}) {
+  const minDiscount = Number(context.minDiscount ?? 40);
+  if (minDiscount >= 100) return [];
+
+  const endpoints = context.config?.stores?.steam?.endpoints || {};
+  const country = normalizeCountryCode(context.region?.country);
+  const fetchFn = context.fetchFn || fetch;
+  const url = new URL(
+    endpoints.dealsSearch ||
+      'https://store.steampowered.com/search/results/?query=&specials=1&category1=998&count=50&infinite=1&json=1'
+  );
+  if (country) {
+    url.searchParams.set('cc', country);
+  }
+
+  const resp = await fetchFn(url.href, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    credentials: 'include',
+    cache: 'no-store'
+  });
+  if (!resp.ok) {
+    throw new Error(`Steam deals request failed (${resp.status})`);
+  }
+
+  const payload = await resp.json();
+  const parsed = parseSteamSearchHtml(payload?.results_html || '', endpoints, { country });
+
+  let ownedIds = context.steamUserdata?.rgOwnedApps;
+  if (!Array.isArray(ownedIds)) {
+    try {
+      const userdataUrl = endpoints.userdata || 'https://store.steampowered.com/dynamicstore/userdata/';
+      const uResp = await fetchFn(userdataUrl, { credentials: 'include', cache: 'no-store' });
+      if (uResp.ok) {
+        const uJson = await uResp.json();
+        ownedIds = uJson?.rgOwnedApps;
+        if (context && typeof context === 'object') {
+          context.steamUserdata = uJson;
+        }
+      }
+    } catch {
+      // Optional ownership filter best-effort only
+    }
+  }
+
+  return filterSteamDiscountDeals(parsed, Math.max(40, minDiscount), ownedIds).slice(0, 50);
 }
 
 /**

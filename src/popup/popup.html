@@ -43,6 +43,10 @@
         <span>Free now</span>
         <span class="tab-count tabular" id="freeCount">0</span>
       </button>
+      <button id="tabBtn-deals" type="button" class="tab" data-tab="deals" role="tab" aria-selected="false" aria-controls="tab-deals" tabindex="-1">
+        <span>Deals</span>
+        <span class="tab-count tabular" id="dealsCount">0</span>
+      </button>
       <button id="tabBtn-claimed" type="button" class="tab" data-tab="claimed" role="tab" aria-selected="false" aria-controls="tab-claimed" tabindex="-1">
         <span>Claimed</span>
         <span class="tab-count tabular" id="claimedCount">0</span>
@@ -55,6 +59,27 @@
 
     <main class="content">
       <section id="tab-free" class="tab-panel active" role="tabpanel" aria-labelledby="tabBtn-free"></section>
+      <section id="tab-deals" class="tab-panel" role="tabpanel" aria-labelledby="tabBtn-deals" hidden>
+        <div class="deals-bar">
+          <div class="deals-bar-top">
+            <label for="dealsDiscountSlider" class="deals-bar-label">Min discount</label>
+            <div class="deals-bar-actions">
+              <span id="dealsDiscountValue" class="badge badge-claimed tabular">75%+</span>
+              <button id="refreshDealsBtn" type="button" class="icon-btn icon-btn-sm" aria-label="Refresh Steam deals" title="Refresh deals">
+                <svg class="icon" aria-hidden="true"><use href="../../assets/icons.svg#icon-refresh"></use></svg>
+              </button>
+            </div>
+          </div>
+          <input id="dealsDiscountSlider" type="range" min="40" max="100" step="1" value="75" class="discount-slider" />
+          <div class="deals-scale tabular">
+            <span>40%</span>
+            <span>70%</span>
+            <span>100% (Free only)</span>
+          </div>
+          <p class="deals-hint">Paid Steam sales (40-99%) open on Steam and are never auto-bought.</p>
+        </div>
+        <div id="dealsListContainer"></div>
+      </section>
       <section id="tab-claimed" class="tab-panel" role="tabpanel" aria-labelledby="tabBtn-claimed" hidden></section>
       <section id="tab-issues" class="tab-panel" role="tabpanel" aria-labelledby="tabBtn-issues" hidden></section>
     </main>
