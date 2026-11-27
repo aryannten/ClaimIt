@@ -6,9 +6,13 @@ ClaimIt is a Chrome Manifest V3 extension that watches Epic Games Store and Stea
 
 ## Screenshots
 
-| Free now | Claimed and regional savings | Settings |
+| Free now | Deals | Free Steam |
 |---|---|---|
-| ![ClaimIt popup Free now tab showing active offer and next daily scan time](docs/images/popup-free-games.png) | ![ClaimIt popup Claimed tab showing total savings formatted in INR](docs/images/popup-claimed.png) | ![ClaimIt Settings page with store switches and currency selector](docs/images/options-settings.png) |
+| ![ClaimIt popup Free now tab showing 5 tabs, store sign-in controls, and active giveaway](docs/images/popup-free-games.png) | ![ClaimIt popup Deals tab showing paid Steam discounts, cover art, review stats, search, sort, and discount slider](docs/images/popup-deals.png) | ![ClaimIt popup Free Steam tab showing free-to-play Steam games with cover art, search, and review popularity](docs/images/popup-free-steam.png) |
+
+| Claimed and savings | Settings |
+|---|---|
+| ![ClaimIt popup Claimed tab showing total savings formatted in INR with game covers](docs/images/popup-claimed.png) | ![ClaimIt Settings page with store sign-in controls, currency selector, and Steam discount slider](docs/images/options-settings.png) |
 
 ## What it does
 
