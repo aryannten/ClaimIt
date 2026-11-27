@@ -25,7 +25,9 @@ export const STORAGE_KEYS = {
   ACCOUNTS: 'claimit_accounts',
   PENDING_SIGNIN: 'claimit_pending_signin',
   STEAM_DEALS: 'claimit_steam_deals',
-  STEAM_DEALS_META: 'claimit_steam_deals_meta'
+  STEAM_DEALS_META: 'claimit_steam_deals_meta',
+  STEAM_FREE_GAMES: 'claimit_steam_free_games',
+  STEAM_FREE_META: 'claimit_steam_free_meta'
 };
 
 export const MIN_STEAM_DISCOUNT_LIMIT = 40;
@@ -33,7 +35,10 @@ export const MAX_STEAM_DISCOUNT_LIMIT = 100;
 export const DEFAULT_STEAM_MIN_DISCOUNT = 75;
 export const STEAM_DEALS_SORT_OPTIONS = ['popular', 'reviews', 'discount', 'price'];
 export const DEFAULT_STEAM_DEALS_SORT = 'popular';
+export const STEAM_FREE_SORT_OPTIONS = ['popular', 'reviews', 'rating'];
+export const DEFAULT_STEAM_FREE_SORT = 'popular';
 const MAX_STEAM_DEALS = 200;
+const MAX_STEAM_FREE_GAMES = 200;
 
 export function clampSteamMinDiscount(value) {
   const num = Number(value);
@@ -43,6 +48,10 @@ export function clampSteamMinDiscount(value) {
 
 export function normalizeSteamDealsSort(value) {
   return STEAM_DEALS_SORT_OPTIONS.includes(value) ? value : DEFAULT_STEAM_DEALS_SORT;
+}
+
+export function normalizeSteamFreeSort(value) {
+  return STEAM_FREE_SORT_OPTIONS.includes(value) ? value : DEFAULT_STEAM_FREE_SORT;
 }
 
 const CYCLE_LOCK_TTL_MS = 5 * 60 * 1000;
@@ -58,6 +67,7 @@ const DEFAULT_SETTINGS = {
   currency: 'auto',
   steamMinDiscount: DEFAULT_STEAM_MIN_DISCOUNT,
   steamDealsSort: DEFAULT_STEAM_DEALS_SORT,
+  steamFreeSort: DEFAULT_STEAM_FREE_SORT,
   remoteConfigUrl: '',
   stores: {
     epic: { enabled: true, mode: 'auto' },
@@ -101,6 +111,10 @@ function mergeSettings(raw = {}) {
       raw.steamDealsSort === undefined
         ? DEFAULT_SETTINGS.steamDealsSort
         : normalizeSteamDealsSort(raw.steamDealsSort),
+    steamFreeSort:
+      raw.steamFreeSort === undefined
+        ? DEFAULT_SETTINGS.steamFreeSort
+        : normalizeSteamFreeSort(raw.steamFreeSort),
     remoteConfigUrl: typeof raw.remoteConfigUrl === 'string' ? raw.remoteConfigUrl : DEFAULT_SETTINGS.remoteConfigUrl,
     stores: mergedStores,
     notifications: {
@@ -585,7 +599,7 @@ export async function getSteamDeals() {
   return Array.isArray(data[STORAGE_KEYS.STEAM_DEALS]) ? data[STORAGE_KEYS.STEAM_DEALS] : [];
 }
 
-const DEFAULT_STEAM_DEALS_META = {
+const DEFAULT_STEAM_BATCH_META = {
   startOffset: 0,
   endOffset: 0,
   nextOffset: 0,
@@ -593,11 +607,8 @@ const DEFAULT_STEAM_DEALS_META = {
   minDiscount: null
 };
 
-export async function getSteamDealsMeta() {
-  if (!hasChromeStorage()) return { ...DEFAULT_STEAM_DEALS_META };
-  const data = await chrome.storage.local.get(STORAGE_KEYS.STEAM_DEALS_META);
-  const raw = data[STORAGE_KEYS.STEAM_DEALS_META];
-  if (!raw || typeof raw !== 'object') return { ...DEFAULT_STEAM_DEALS_META };
+function normalizeBatchMeta(raw) {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_STEAM_BATCH_META };
   return {
     startOffset: Math.max(0, Number(raw.startOffset) || 0),
     endOffset: Math.max(0, Number(raw.endOffset) || 0),
@@ -607,18 +618,40 @@ export async function getSteamDealsMeta() {
   };
 }
 
+export async function getSteamDealsMeta() {
+  if (!hasChromeStorage()) return { ...DEFAULT_STEAM_BATCH_META };
+  const data = await chrome.storage.local.get(STORAGE_KEYS.STEAM_DEALS_META);
+  return normalizeBatchMeta(data[STORAGE_KEYS.STEAM_DEALS_META]);
+}
+
 export async function setSteamDeals(deals, meta = null) {
   if (!hasChromeStorage()) return;
   const clean = Array.isArray(deals) ? deals.slice(0, MAX_STEAM_DEALS) : [];
   const payload = { [STORAGE_KEYS.STEAM_DEALS]: clean };
   if (meta && typeof meta === 'object') {
-    payload[STORAGE_KEYS.STEAM_DEALS_META] = {
-      startOffset: Math.max(0, Number(meta.startOffset) || 0),
-      endOffset: Math.max(0, Number(meta.endOffset) || 0),
-      nextOffset: Math.max(0, Number(meta.nextOffset) || 0),
-      totalCount: Number.isFinite(meta.totalCount) ? meta.totalCount : null,
-      minDiscount: Number.isFinite(meta.minDiscount) ? meta.minDiscount : null
-    };
+    payload[STORAGE_KEYS.STEAM_DEALS_META] = normalizeBatchMeta(meta);
+  }
+  await chrome.storage.local.set(payload);
+}
+
+export async function getSteamFreeGames() {
+  if (!hasChromeStorage()) return [];
+  const data = await chrome.storage.local.get(STORAGE_KEYS.STEAM_FREE_GAMES);
+  return Array.isArray(data[STORAGE_KEYS.STEAM_FREE_GAMES]) ? data[STORAGE_KEYS.STEAM_FREE_GAMES] : [];
+}
+
+export async function getSteamFreeMeta() {
+  if (!hasChromeStorage()) return { ...DEFAULT_STEAM_BATCH_META };
+  const data = await chrome.storage.local.get(STORAGE_KEYS.STEAM_FREE_META);
+  return normalizeBatchMeta(data[STORAGE_KEYS.STEAM_FREE_META]);
+}
+
+export async function setSteamFreeGames(games, meta = null) {
+  if (!hasChromeStorage()) return;
+  const clean = Array.isArray(games) ? games.slice(0, MAX_STEAM_FREE_GAMES) : [];
+  const payload = { [STORAGE_KEYS.STEAM_FREE_GAMES]: clean };
+  if (meta && typeof meta === 'object') {
+    payload[STORAGE_KEYS.STEAM_FREE_META] = normalizeBatchMeta(meta);
   }
   await chrome.storage.local.set(payload);
 }

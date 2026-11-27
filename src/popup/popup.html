@@ -47,6 +47,10 @@
         <span>Deals</span>
         <span class="tab-count tabular" id="dealsCount">0</span>
       </button>
+      <button id="tabBtn-free-steam" type="button" class="tab" data-tab="free-steam" role="tab" aria-selected="false" aria-controls="tab-free-steam" tabindex="-1" title="All free Steam games">
+        <span>Free Steam</span>
+        <span class="tab-count tabular" id="freeSteamCount">0</span>
+      </button>
       <button id="tabBtn-claimed" type="button" class="tab" data-tab="claimed" role="tab" aria-selected="false" aria-controls="tab-claimed" tabindex="-1">
         <span>Claimed</span>
         <span class="tab-count tabular" id="claimedCount">0</span>
@@ -94,6 +98,31 @@
           <p class="deals-hint" id="dealsHint">Top Steam sales (40-99%) open on Steam and are never auto-bought.</p>
         </div>
         <div id="dealsListContainer"></div>
+      </section>
+      <section id="tab-free-steam" class="tab-panel" role="tabpanel" aria-labelledby="tabBtn-free-steam" hidden>
+        <div class="deals-bar">
+          <div class="deals-controls-row">
+            <div class="search-field">
+              <svg class="icon search-icon" aria-hidden="true"><use href="../../assets/icons.svg#icon-search"></use></svg>
+              <input id="freeSteamSearchInput" type="text" class="search-input" placeholder="Search free Steam games (e.g. Apex)" aria-label="Search free Steam games" autocomplete="off" spellcheck="false" maxlength="80" />
+              <button id="clearFreeSteamSearchBtn" type="button" class="search-clear-btn hidden" aria-label="Clear search" title="Clear search">
+                <svg class="icon" aria-hidden="true"><use href="../../assets/icons.svg#icon-close"></use></svg>
+              </button>
+            </div>
+            <select id="freeSteamSortSelect" class="select-compact" aria-label="Sort free Steam games">
+              <option value="popular">Popular</option>
+              <option value="reviews">Most reviewed</option>
+              <option value="rating">Highest rated</option>
+            </select>
+          </div>
+          <div class="deals-bar-top">
+            <p class="deals-hint" id="freeSteamHint">All free-to-play and 100%-off games on Steam.</p>
+            <button id="refreshFreeSteamBtn" type="button" class="icon-btn icon-btn-sm" aria-label="Refresh free Steam games" title="Show next batch of free Steam games">
+              <svg class="icon" aria-hidden="true"><use href="../../assets/icons.svg#icon-refresh"></use></svg>
+            </button>
+          </div>
+        </div>
+        <div id="freeSteamListContainer"></div>
       </section>
       <section id="tab-claimed" class="tab-panel" role="tabpanel" aria-labelledby="tabBtn-claimed" hidden></section>
       <section id="tab-issues" class="tab-panel" role="tabpanel" aria-labelledby="tabBtn-issues" hidden></section>
