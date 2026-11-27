@@ -13,10 +13,10 @@ ClaimIt is a Chrome Manifest V3 extension that watches Epic Games Store and Stea
 ## What it does
 
 - Claims eligible giveaways automatically in a background tab, or notifies you when input is needed.
-- Supports Epic Games Store and Steam, plus an optional **Deals** tab for paid Steam sales (40%–99% off).
-- Filters strictly for limited-time 100%-off games and DLC, ignoring free-to-play titles, demos, and trials.
-- Runs one randomised scan per day, scanning sooner only if a known offer expires early.
-- Displays store prices and total savings in your local currency, such as INR, EUR, USD, or JPY.
+- Auto-claims free-to-keep giveaways from Epic Games Store and Steam, ignoring free-to-play titles, demos, and trials.
+- Includes **Deals** (paid Steam sales with a 40%–100% slider, search, sort, and batch refresh) and **Free Steam** (all free Steam games) tabs.
+- Runs an initial scan on install, then one randomised scan per day, checking sooner if a known offer expires early.
+- Displays store cover art, prices, Steam review popularity, and total savings in your local currency (such as INR, EUR, USD, or JPY).
 - Sends desktop Chrome notifications plus optional Telegram Bot and Discord webhook alerts.
 - Provides an instant Pause toggle and a Dry-run mode for safe testing.
 
@@ -35,9 +35,9 @@ Internal notes on code layout, tests, and packaging live in [docs/DEVELOPMENT.md
 
 ## Using it
 
-- **Popup tabs**: Switch between **Free now**, **Deals** (Steam sales with a 40%–100% discount slider), **Claimed** (total saved), and **Issues**.
+- **Popup tabs**: Switch between **Free now**, **Deals** (40%–100% slider, search, sort, batch refresh), **Free Steam** (all free-to-play and 100%-off games), **Claimed** (total saved), and **Issues**.
 - **Check now**: Runs a manual check immediately, subject to a 5-minute cooldown between runs.
-- **Store controls**: Enable or disable stores in Settings and choose **Auto-claim** or **Notify only** per store.
+- **Store controls**: Enable or disable stores in Settings, pick **Auto-claim** or **Notify only**, and view the collapsible **Activity log** under Advanced.
 - **Dry-run mode**: Walks through offer detection and checkout setup without clicking the final claim button.
 
 ## Supported stores
@@ -45,7 +45,7 @@ Internal notes on code layout, tests, and packaging live in [docs/DEVELOPMENT.md
 | Store | Status | Notes |
 |---|---|---|
 | Epic Games Store | Active | Uses public `freeGamesPromotions` feed and checkout tab automation |
-| Steam | Active | Checks free specials, `appdetails`, and ownership, then clicks Add to Account |
+| Steam | Active | Claims free specials via Add to Account, and powers the Deals and Free Steam tabs |
 | GOG, Prime Gaming, Fab, itch.io | Planned | Disabled stubs, not implemented |
 
 ## Permissions
