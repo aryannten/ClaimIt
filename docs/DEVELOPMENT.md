@@ -6,12 +6,12 @@ These are internal engineering notes for the author's maintenance of ClaimIt. Th
 
 ClaimIt runs as a Chrome Manifest V3 extension (`src/background.js` module service worker) with zero runtime dependencies and zero build compilation step:
 
-1. **Providers (`src/providers/`)** fetch public free-promotion endpoints and normalize offers (`epic.js`, `steam.js`) or serve as disabled stubs (`gog.js`, `prime-gaming.js`, `fab.js`, `itch.js`).
-2. **Classifier (`src/classifier.js`)** accepts only limited-time, 100%-off free-to-keep titles and DLC (tagged `DLC`), rejecting permanent free-to-play games, demos, trials/weekends, partial discounts, and upcoming promotions.
-3. **Engine (`src/engine.js`)** acquires a storage cycle lock (`claimit_cycle_lock`), enforces a safety cap (`MAX_CLAIMS_PER_CYCLE = 20`) and serialized 60-second claim timeout, and isolates provider failures.
-4. **Scheduler (`src/scheduler.js`)** sets one randomized one-shot `chrome.alarms` `{ when }` alarm per day (`12h` to `36h` bounds around `24h`, pulled earlier if an offer expires soon) plus a `30-180 s` startup catch-up alarm when browser downtime misses a scan.
+1. **Providers (`src/providers/`)** fetch public free-promotion endpoints (`epic.js`, `steam.js`), paginate Steam's **Deals** (`specials=1`) and **Free Steam** (`maxprice=free`) catalogs with review parsing and search, or serve as disabled stubs (`gog.js`, `prime-gaming.js`, `fab.js`, `itch.js`).
+2. **Classifier (`src/classifier.js`)** accepts only limited-time, 100%-off free-to-keep titles and DLC (tagged `DLC`) for auto-claiming, rejecting permanent free-to-play games, demos, trials/weekends, partial discounts, and upcoming promotions.
+3. **Engine (`src/engine.js`)** acquires a storage cycle lock (`claimit_cycle_lock`), enforces a safety cap (`MAX_CLAIMS_PER_CYCLE = 20`) and serialized 60-second claim timeout, isolates provider failures, and manages rotating batch offsets for Deals and Free Steam.
+4. **Scheduler (`src/scheduler.js`)** sets one randomized one-shot `chrome.alarms` `{ when }` alarm per day (`12h` to `36h` bounds around `24h`, pulled earlier if an offer expires soon) plus a `30-180 s` startup catch-up alarm when browser downtime misses a scan (install triggers an immediate first check).
 5. **Currency & Notifications (`src/currency.js`, `src/notifications.js`)** resolve store/locale currency (`Auto` or explicit currency), fetch 24h FX fallback rates from `open.er-api.com` when needed, deduplicate notifications per cycle, and optionally send Telegram/Discord alerts.
-6. **Security & Validation (`src/url-validator.js`, `src/remote-config.js`, `src/logger.js`)** enforce store URL allowlists, Discord webhook path checks, schema/size validation on remote `selectors.json`, `sender.id` IPC checks, and token redaction across the 50-entry log ring buffer.
+6. **Security & Validation (`src/url-validator.js`, `src/remote-config.js`, `src/logger.js`)** enforce store URL allowlists, Epic/Steam CDN image allowlists (`isAllowedImageUrl`), Discord webhook path checks, schema/size validation on remote `selectors.json`, `sender.id` IPC checks, and token redaction across the 50-entry log ring buffer.
 
 ```mermaid
 flowchart TD
@@ -48,8 +48,9 @@ claimit-extension/
 │   ├── DEVELOPMENT.md         # Internal engineering notes (this file)
 │   └── images/                # Documentation screenshots
 ├── scripts/
-│   └── build-zip.js           # Pure Node packager -> claimit-extension.zip (41 runtime files)
+│   └── build-zip.js           # Pure Node packager -> claimit-extension.zip (42 runtime files)
 ├── src/
+│   ├── accounts.js            # One-click store Sign in tab tracking & session checks
 │   ├── background.js          # Service worker, alarms, notification clicks, IPC
 │   ├── classifier.js          # Pure free-to-keep offer filter
 │   ├── currency.js            # Region detection, FX cache, Intl formatters
@@ -66,7 +67,7 @@ claimit-extension/
 │   ├── ui/                    # SVG helpers and Intl time formatters
 │   ├── popup/                 # Toolbar popup UI
 │   └── options/               # Options & log viewer page
-└── tests/                     # Node.js built-in test runner suites (53 tests)
+└── tests/                     # Node.js built-in test runner suites (66 tests)
 ```
 
 ## Local Commands
@@ -75,8 +76,8 @@ Verified on Node.js v24.19.0 (compatible with Node.js 20+):
 
 ```bash
 npm run lint    # ESLint static checks and worker timer guardrails
-npm test        # Runs tests/*.test.js via node --test (53 unit & security tests)
-npm run build   # Builds runtime-only claimit-extension.zip (~89.3 KB zipped)
+npm test        # Runs tests/*.test.js via node --test (66 unit & security tests)
+npm run build   # Builds runtime-only claimit-extension.zip (~106.0 KB zipped)
 ```
 
 Manual browser verification steps (loading unpacked, inspecting service worker logs, and verifying dry-run notifications) are in [TESTING.md](../TESTING.md).
