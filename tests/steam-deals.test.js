@@ -8,17 +8,25 @@ import assert from 'node:assert/strict';
 import {
   parseSteamSearchHtml,
   filterSteamDiscountDeals,
+  filterSteamFreeGames,
   fetchSteamDeals,
-  fetchSteamDealsWithMeta
+  fetchSteamDealsWithMeta,
+  fetchSteamFreeGamesWithMeta
 } from '../src/providers/steam.js';
-import { refreshSteamDeals } from '../src/engine.js';
+import {
+  refreshSteamDeals,
+  refreshSteamFreeGames,
+  searchSteamFreeGames
+} from '../src/engine.js';
 import { classifyOffers } from '../src/classifier.js';
 import {
   STORAGE_KEYS,
   clampSteamMinDiscount,
   DEFAULT_STEAM_MIN_DISCOUNT,
   normalizeSteamDealsSort,
-  DEFAULT_STEAM_DEALS_SORT
+  DEFAULT_STEAM_DEALS_SORT,
+  normalizeSteamFreeSort,
+  DEFAULT_STEAM_FREE_SORT
 } from '../src/storage.js';
 import { formatCompactCount } from '../src/ui/ui-helpers.js';
 
@@ -442,6 +450,127 @@ describe('Steam discount deals filter & slider range', () => {
       const wrapped = await refreshSteamDeals({ advance: true, config: {}, fetchFn: mockFetch });
       assert.equal(wrapped[0].id, '10000');
       assert.equal(store[STORAGE_KEYS.STEAM_DEALS_META].startOffset, 0);
+    } finally {
+      delete globalThis.chrome;
+    }
+  });
+
+  it('filterSteamFreeGames, refreshSteamFreeGames, and searchSteamFreeGames cover all free Steam games with covers and rotation', async () => {
+    const html = `
+      <a href="https://store.steampowered.com/app/730/CounterStrike_2/" data-ds-appid="730" class="search_result_row">
+        <div class="search_capsule"><img src="https://shared.akamai.steamstatic.com/cs2.jpg"></div>
+        <span class="title">Counter-Strike 2</span>
+        <span class="search_review_summary positive" data-tooltip-html="Very Positive&lt;br&gt;85% of the 2,654,859 user reviews for this game are positive."></span>
+        <div class="search_price_discount_combined" data-price-final="137000">
+          <div class="discount_block no_discount"><div class="discount_prices"><div class="discount_final_price free">Free</div></div></div>
+        </div>
+      </a>
+      <a href="https://store.steampowered.com/app/1172470/Apex_Legends/" data-ds-appid="1172470" class="search_result_row">
+        <div class="search_capsule"><img src="https://shared.akamai.steamstatic.com/apex.jpg"></div>
+        <span class="title">Apex Legends</span>
+        <span class="search_review_summary positive" data-tooltip-html="Mostly Positive&lt;br&gt;76% of the 454,651 user reviews for this game are positive."></span>
+        <div class="discount_block no_discount"><div class="discount_final_price free">Free</div></div>
+      </a>
+      <a href="https://store.steampowered.com/app/999001/Free_Indie_100/" data-ds-appid="999001" class="search_result_row">
+        <span class="title">Promo 100 Game</span>
+        <span class="search_review_summary positive" data-tooltip-html="Overwhelmingly Positive&lt;br&gt;96% of the 5,000 user reviews for this game are positive."></span>
+        <div class="discount_block" data-price-final="0" data-discount="100">
+          <div class="discount_original_price">₹499.00</div>
+          <div class="discount_final_price">Free</div>
+        </div>
+      </a>
+      <a href="https://store.steampowered.com/app/999002/Paid_Game/" data-ds-appid="999002" class="search_result_row">
+        <span class="title">Paid Game</span>
+        <div class="discount_block" data-price-final="49900" data-discount="50">
+          <div class="discount_original_price">₹999.00</div>
+          <div class="discount_final_price">₹499.00</div>
+        </div>
+      </a>
+    `;
+
+    const parsed = parseSteamSearchHtml(html, {}, { country: 'IN' }).map((o, idx) => ({ ...o, topRank: idx + 1 }));
+    // CS2 with Free text + Paid Game filtered out; owned CS2 is kept and flagged alreadyOwned
+    const freeOnly = filterSteamFreeGames(parsed, [730], { sortBy: 'popular' });
+    assert.deepEqual(freeOnly.map((g) => g.id), ['730', '1172470', '999001']);
+    assert.equal(freeOnly[0].alreadyOwned, true);
+    assert.equal(freeOnly[1].alreadyOwned, false);
+
+    // Highest rated sort puts 96% promo first
+    const byRating = filterSteamFreeGames(parsed, [730], { sortBy: 'rating' });
+    assert.deepEqual(byRating.map((g) => g.id), ['999001', '730', '1172470']);
+
+    assert.equal(normalizeSteamFreeSort('bogus'), DEFAULT_STEAM_FREE_SORT);
+    assert.equal(normalizeSteamFreeSort('rating'), 'rating');
+
+    const store = {};
+    globalThis.chrome = {
+      storage: {
+        local: {
+          async get(keys) {
+            if (typeof keys === 'string') return { [keys]: store[keys] };
+            return { ...store };
+          },
+          async set(obj) {
+            Object.assign(store, obj);
+          }
+        }
+      }
+    };
+
+    try {
+      const makeFreeRows = (startId, count) =>
+        Array.from({ length: count }, (_, idx) => {
+          const id = startId + idx;
+          return `
+            <a href="https://store.steampowered.com/app/${id}/Free_${id}/" data-ds-appid="${id}" class="search_result_row">
+              <span class="title">Free Game ${id}</span>
+              <div class="discount_block no_discount"><div class="discount_final_price free">Free</div></div>
+            </a>
+          `;
+        }).join('');
+
+      const mockUrls = [];
+      const mockFetch = async (href) => {
+        mockUrls.push(href);
+        if (href.includes('userdata')) {
+          return new Response(JSON.stringify({ rgOwnedApps: [20000] }), { status: 200 });
+        }
+        const url = new URL(href);
+        const start = Number(url.searchParams.get('start') || 0);
+        const term = url.searchParams.get('term');
+        if (term) {
+          return new Response(JSON.stringify({ success: 1, total_count: 1, results_html: html }), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify({ success: 1, total_count: 1000, results_html: makeFreeRows(20000 + start, 50) }),
+          { status: 200 }
+        );
+      };
+
+      const direct = await fetchSteamFreeGamesWithMeta({
+        maxPages: 2,
+        startOffset: 0,
+        fetchFn: mockFetch
+      });
+      assert.equal(direct.games.length, 100);
+      assert.equal(direct.nextOffset, 100);
+      assert.ok(mockUrls.some((u) => u.includes('maxprice=free')));
+
+      const b1 = await refreshSteamFreeGames({ advance: false, config: {}, fetchFn: mockFetch });
+      assert.equal(b1.length, 200);
+      assert.equal(b1[0].id, '20000');
+      assert.equal(b1[0].alreadyOwned, true);
+      assert.equal(store[STORAGE_KEYS.STEAM_FREE_META].nextOffset, 200);
+
+      const b2 = await refreshSteamFreeGames({ advance: true, config: {}, fetchFn: mockFetch });
+      assert.equal(b2.length, 200);
+      assert.equal(b2[0].id, '20200');
+
+      const searchRes = await searchSteamFreeGames('Counter-Strike', { config: {}, fetchFn: mockFetch });
+      assert.equal(searchRes.query, 'Counter-Strike');
+      assert.equal(searchRes.games.length, 3);
+      // Searching does not overwrite cached Free Steam batch
+      assert.equal(store[STORAGE_KEYS.STEAM_FREE_GAMES][0].id, '20200');
     } finally {
       delete globalThis.chrome;
     }

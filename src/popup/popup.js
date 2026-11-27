@@ -12,10 +12,13 @@ import {
   getAccountStates,
   getSteamDeals,
   getSteamDealsMeta,
+  getSteamFreeGames,
+  getSteamFreeMeta,
   clampSteamMinDiscount,
-  normalizeSteamDealsSort
+  normalizeSteamDealsSort,
+  normalizeSteamFreeSort
 } from '../storage.js';
-import { filterSteamDiscountDeals } from '../providers/steam.js';
+import { filterSteamDiscountDeals, filterSteamFreeGames } from '../providers/steam.js';
 import {
   resolveRegionAndCurrency,
   getExchangeRates,
@@ -47,7 +50,9 @@ const RELEVANT_STORAGE_KEYS = new Set([
   STORAGE_KEYS.FX_RATES,
   STORAGE_KEYS.ACCOUNTS,
   STORAGE_KEYS.STEAM_DEALS,
-  STORAGE_KEYS.STEAM_DEALS_META
+  STORAGE_KEYS.STEAM_DEALS_META,
+  STORAGE_KEYS.STEAM_FREE_GAMES,
+  STORAGE_KEYS.STEAM_FREE_META
 ]);
 
 const COVER_FALLBACK = '../../assets/cover-fallback.svg';
@@ -64,10 +69,12 @@ const els = {
   checkNowLabel: document.getElementById('checkNowLabel'),
   freeCount: document.getElementById('freeCount'),
   dealsCount: document.getElementById('dealsCount'),
+  freeSteamCount: document.getElementById('freeSteamCount'),
   claimedCount: document.getElementById('claimedCount'),
   issuesCount: document.getElementById('issuesCount'),
   tabFree: document.getElementById('tab-free'),
   tabDeals: document.getElementById('tab-deals'),
+  tabFreeSteam: document.getElementById('tab-free-steam'),
   dealsSearchInput: document.getElementById('dealsSearchInput'),
   clearDealsSearchBtn: document.getElementById('clearDealsSearchBtn'),
   dealsSortSelect: document.getElementById('dealsSortSelect'),
@@ -76,6 +83,12 @@ const els = {
   refreshDealsBtn: document.getElementById('refreshDealsBtn'),
   dealsHint: document.getElementById('dealsHint'),
   dealsListContainer: document.getElementById('dealsListContainer'),
+  freeSteamSearchInput: document.getElementById('freeSteamSearchInput'),
+  clearFreeSteamSearchBtn: document.getElementById('clearFreeSteamSearchBtn'),
+  freeSteamSortSelect: document.getElementById('freeSteamSortSelect'),
+  refreshFreeSteamBtn: document.getElementById('refreshFreeSteamBtn'),
+  freeSteamHint: document.getElementById('freeSteamHint'),
+  freeSteamListContainer: document.getElementById('freeSteamListContainer'),
   tabClaimed: document.getElementById('tab-claimed'),
   tabIssues: document.getElementById('tab-issues')
 };
@@ -85,18 +98,26 @@ let renderQueued = false;
 let lastIpcError = null;
 let latestSteamDeals = [];
 let latestSteamDealsMeta = null;
+let latestSteamFreeGames = [];
+let latestSteamFreeMeta = null;
 let latestPriceContext = null;
 let latestSteamEnabled = true;
 let latestMinDiscount = 75;
 let latestDealsSort = 'popular';
+let latestFreeSteamSort = 'popular';
 let dealsSearchQuery = '';
 let latestRemoteSearch = null;
 let dealsSearchLoading = false;
 let dealsRefreshing = false;
 let dealsRefreshingAdvance = false;
-let dealsSearchTimer = null;
-let dealsSearchRequestSeq = 0;
+let freeSteamSearchQuery = '';
+let latestFreeSteamRemote = null;
+let freeSteamSearchLoading = false;
+let freeSteamRefreshing = false;
+let freeSteamRefreshingAdvance = false;
 let autoLoadedDealsOnce = false;
+let autoLoadedFreeSteamOnce = false;
+const controlCleanupFns = [];
 
 function isSafeHttpsUrl(url) {
   return isAllowedStoreUrl(url);
@@ -514,6 +535,38 @@ function formatDiscountLabel(minDiscount) {
   return val >= 100 ? '100% (Free only)' : `${val}%+ off`;
 }
 
+function appendReviewBadges(statusLine, item, priceContext, hideTopRank) {
+  if (Number.isFinite(item.reviewPercent) || (Number.isFinite(item.reviewCount) && item.reviewCount > 0)) {
+    const revBadge = document.createElement('span');
+    revBadge.className = `badge tabular ${
+      item.reviewSentiment === 'mixed'
+        ? 'badge-needs'
+        : item.reviewSentiment === 'negative'
+          ? 'badge-failed'
+          : 'badge-neutral'
+    }`;
+    const countLabel = Number.isFinite(item.reviewCount) && item.reviewCount > 0
+      ? formatCompactCount(item.reviewCount, priceContext?.locale)
+      : '';
+    const pctLabel = Number.isFinite(item.reviewPercent) ? `${item.reviewPercent}%` : '';
+    revBadge.textContent = [pctLabel, countLabel ? `${countLabel} reviews` : ''].filter(Boolean).join(' · ');
+    if (item.reviewSummary) {
+      revBadge.title = Number.isFinite(item.reviewCount) && Number.isFinite(item.reviewPercent)
+        ? `${item.reviewSummary}: ${item.reviewPercent}% of ${item.reviewCount.toLocaleString()} reviews`
+        : item.reviewSummary;
+    }
+    statusLine.appendChild(revBadge);
+  }
+
+  if (!hideTopRank && Number.isFinite(item.topRank) && item.topRank >= 1 && item.topRank <= 100) {
+    const rankBadge = document.createElement('span');
+    rankBadge.className = 'badge badge-neutral tabular';
+    rankBadge.textContent = `Top #${item.topRank}`;
+    rankBadge.title = `Steam rank #${item.topRank}`;
+    statusLine.appendChild(rankBadge);
+  }
+}
+
 function createDealRow(item, priceContext) {
   const row = document.createElement('article');
   row.className = 'offer-row';
@@ -576,37 +629,7 @@ function createDealRow(item, priceContext) {
   pctBadge.className = 'badge badge-claimed tabular';
   pctBadge.textContent = `-${item.discountPercent}%`;
   statusLine.appendChild(pctBadge);
-
-  if (Number.isFinite(item.reviewPercent) || (Number.isFinite(item.reviewCount) && item.reviewCount > 0)) {
-    const revBadge = document.createElement('span');
-    revBadge.className = `badge tabular ${
-      item.reviewSentiment === 'mixed'
-        ? 'badge-needs'
-        : item.reviewSentiment === 'negative'
-          ? 'badge-failed'
-          : 'badge-neutral'
-    }`;
-    const countLabel = Number.isFinite(item.reviewCount) && item.reviewCount > 0
-      ? formatCompactCount(item.reviewCount, priceContext?.locale)
-      : '';
-    const pctLabel = Number.isFinite(item.reviewPercent) ? `${item.reviewPercent}%` : '';
-    revBadge.textContent = [pctLabel, countLabel ? `${countLabel} reviews` : ''].filter(Boolean).join(' · ');
-    if (item.reviewSummary) {
-      revBadge.title = Number.isFinite(item.reviewCount) && Number.isFinite(item.reviewPercent)
-        ? `${item.reviewSummary}: ${item.reviewPercent}% of ${item.reviewCount.toLocaleString()} reviews`
-        : item.reviewSummary;
-    }
-    statusLine.appendChild(revBadge);
-  }
-
-  if (Number.isFinite(item.topRank) && item.topRank >= 1 && item.topRank <= 100 && !dealsSearchQuery.trim()) {
-    const rankBadge = document.createElement('span');
-    rankBadge.className = 'badge badge-neutral tabular';
-    rankBadge.textContent = `Top #${item.topRank}`;
-    rankBadge.title = `Steam Top Sellers rank #${item.topRank}`;
-    statusLine.appendChild(rankBadge);
-  }
-
+  appendReviewBadges(statusLine, item, priceContext, Boolean(dealsSearchQuery.trim()));
   main.appendChild(statusLine);
 
   row.appendChild(main);
@@ -618,6 +641,88 @@ function createDealRow(item, priceContext) {
     viewBtn.type = 'button';
     viewBtn.className = 'btn btn-primary';
     viewBtn.append(createSvgUse('icon-external-link'), document.createTextNode('View deal'));
+    viewBtn.addEventListener('click', () => {
+      openStoreTab(item.url);
+    });
+    actions.appendChild(viewBtn);
+  }
+  row.appendChild(actions);
+  return row;
+}
+
+function createFreeSteamRow(item, priceContext) {
+  const row = document.createElement('article');
+  row.className = 'offer-row';
+  row.appendChild(createCoverThumbnail(item));
+
+  const main = document.createElement('div');
+  main.className = 'offer-main';
+
+  const title = document.createElement('h3');
+  title.className = 'offer-title';
+  title.textContent = item.title;
+  title.title = item.title;
+  main.appendChild(title);
+
+  const meta = document.createElement('div');
+  meta.className = 'offer-meta tabular';
+
+  const storeTag = document.createElement('span');
+  storeTag.className = 'store-tag';
+  storeTag.append(createSvgUse('store-steam', 'store-tile', 'stores.svg'), document.createTextNode('Steam'));
+  meta.appendChild(storeTag);
+
+  const pricePair = document.createElement('span');
+  pricePair.className = 'price-pair';
+  if (item.discountPercent === 100 && item.originalPrice > 0) {
+    const origState = formatOfferPriceState(
+      {
+        originalPriceValue: item.originalPrice,
+        originalPriceFormatted: item.originalPriceFormatted,
+        currencyCode: item.currencyCode
+      },
+      priceContext
+    );
+    if (origState.available) {
+      const del = document.createElement('del');
+      del.className = 'price-old';
+      del.textContent = origState.approx ? `~${origState.formatted}` : origState.formatted;
+      pricePair.appendChild(del);
+    }
+  }
+  const freeLbl = document.createElement('span');
+  freeLbl.className = 'price-free';
+  freeLbl.textContent = 'Free';
+  pricePair.appendChild(freeLbl);
+  meta.appendChild(pricePair);
+  main.appendChild(meta);
+
+  const statusLine = document.createElement('div');
+  statusLine.className = 'offer-status-line';
+  const kindBadge = document.createElement('span');
+  kindBadge.className = item.discountPercent === 100 ? 'badge badge-claimed tabular' : 'badge badge-neutral';
+  kindBadge.textContent = item.discountPercent === 100 ? '100% off' : 'Free to Play';
+  statusLine.appendChild(kindBadge);
+
+  if (item.alreadyOwned) {
+    const ownedBadge = document.createElement('span');
+    ownedBadge.className = 'badge badge-neutral';
+    ownedBadge.append(createSvgUse('icon-check'), document.createTextNode('In library'));
+    statusLine.appendChild(ownedBadge);
+  }
+
+  appendReviewBadges(statusLine, item, priceContext, Boolean(freeSteamSearchQuery.trim()));
+  main.appendChild(statusLine);
+
+  row.appendChild(main);
+
+  const actions = document.createElement('div');
+  actions.className = 'offer-actions';
+  if (isSafeHttpsUrl(item.url)) {
+    const viewBtn = document.createElement('button');
+    viewBtn.type = 'button';
+    viewBtn.className = 'btn btn-primary';
+    viewBtn.append(createSvgUse('icon-external-link'), document.createTextNode('Open'));
     viewBtn.addEventListener('click', () => {
       openStoreTab(item.url);
     });
@@ -797,9 +902,168 @@ async function refreshTopSteamDeals({ advance = false } = {}) {
   }
 }
 
+async function renderFreeSteamList({
+  allGames,
+  freeMeta,
+  sortBy,
+  searchQuery,
+  remoteSearch,
+  searchLoading,
+  priceContext,
+  steamEnabled
+}) {
+  if (!els.freeSteamListContainer) return;
+  const activeSort = normalizeSteamFreeSort(sortBy);
+  const cleanQuery = typeof searchQuery === 'string' ? searchQuery.trim() : '';
+
+  if (els.freeSteamSortSelect && document.activeElement !== els.freeSteamSortSelect) {
+    els.freeSteamSortSelect.value = activeSort;
+  }
+  if (els.clearFreeSteamSearchBtn) {
+    els.clearFreeSteamSearchBtn.classList.toggle('hidden', cleanQuery.length === 0);
+  }
+
+  const hasRemoteMatch = Boolean(cleanQuery.length >= 2 && remoteSearch && remoteSearch.query === cleanQuery);
+  let filtered = [];
+  if (hasRemoteMatch) {
+    const localMatches = filterSteamFreeGames(allGames, null, { query: cleanQuery });
+    const merged = mergeDealsById(remoteSearch.games, localMatches);
+    filtered = filterSteamFreeGames(merged, null, { sortBy: activeSort });
+  } else {
+    filtered = filterSteamFreeGames(allGames, null, { query: cleanQuery, sortBy: activeSort });
+  }
+
+  if (els.freeSteamCount) {
+    els.freeSteamCount.textContent = String(filtered.length);
+  }
+  if (els.freeSteamHint) {
+    if (searchLoading && cleanQuery.length >= 2) {
+      els.freeSteamHint.textContent = `Searching free Steam games for "${cleanQuery}"...`;
+    } else if (freeSteamRefreshing && freeSteamRefreshingAdvance) {
+      els.freeSteamHint.textContent = 'Loading next batch of free Steam games...';
+    } else if (freeSteamRefreshing) {
+      els.freeSteamHint.textContent = 'Scanning up to 500 free Steam games...';
+    } else if (hasRemoteMatch) {
+      els.freeSteamHint.textContent = `Live Steam search for "${cleanQuery}" (${filtered.length} free ${filtered.length === 1 ? 'game' : 'games'}).`;
+    } else if (cleanQuery.length === 1) {
+      els.freeSteamHint.textContent = `Filtering cached free games for "${cleanQuery}" (type 2+ chars for full search).`;
+    } else if (cleanQuery.length >= 2) {
+      els.freeSteamHint.textContent = `Showing cached matches for "${cleanQuery}"...`;
+    } else if (freeMeta && freeMeta.endOffset > freeMeta.startOffset) {
+      const rangeLabel = `#${freeMeta.startOffset + 1}-${freeMeta.endOffset}`;
+      const totalLabel = Number.isFinite(freeMeta.totalCount) ? ` of ${freeMeta.totalCount.toLocaleString()}` : '';
+      els.freeSteamHint.textContent = `Free Steam ${rangeLabel}${totalLabel} (${filtered.length} games). Press Refresh for next batch.`;
+    } else {
+      els.freeSteamHint.textContent = 'All free-to-play and 100%-off games on Steam.';
+    }
+  }
+
+  els.freeSteamListContainer.replaceChildren();
+  if (!steamEnabled) {
+    await renderStateBox(els.freeSteamListContainer, {
+      illusId: 'illus-empty-free',
+      title: 'Steam is disabled',
+      desc: 'Enable Steam in Settings to browse all free Steam games.'
+    });
+    return;
+  }
+  if ((searchLoading || freeSteamRefreshing) && filtered.length === 0) {
+    renderLoadingSkeleton(els.freeSteamListContainer);
+    return;
+  }
+  if (!cleanQuery && allGames.length === 0) {
+    await renderStateBox(els.freeSteamListContainer, {
+      illusId: 'illus-first-run',
+      title: 'No free Steam catalog loaded yet',
+      desc: 'Load top free-to-play and free promotional games from Steam.',
+      actionLabel: 'Load free games',
+      onAction: () => refreshFreeSteamCatalog()
+    });
+    return;
+  }
+  if (filtered.length === 0) {
+    await renderStateBox(els.freeSteamListContainer, {
+      illusId: 'illus-empty-free',
+      title: `No free Steam games match "${cleanQuery}"`,
+      desc: 'Try another game title or clear the search box.'
+    });
+    return;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'offer-list';
+  for (const game of filtered) {
+    list.appendChild(createFreeSteamRow(game, priceContext));
+  }
+  els.freeSteamListContainer.appendChild(list);
+}
+
+function renderCurrentFreeSteam() {
+  if (!latestPriceContext) return Promise.resolve();
+  return renderFreeSteamList({
+    allGames: latestSteamFreeGames,
+    freeMeta: latestSteamFreeMeta,
+    sortBy: latestFreeSteamSort,
+    searchQuery: freeSteamSearchQuery,
+    remoteSearch: latestFreeSteamRemote,
+    searchLoading: freeSteamSearchLoading,
+    priceContext: latestPriceContext,
+    steamEnabled: latestSteamEnabled
+  });
+}
+
+async function refreshFreeSteamCatalog({ advance = false } = {}) {
+  freeSteamRefreshing = true;
+  freeSteamRefreshingAdvance = Boolean(advance);
+  if (els.refreshFreeSteamBtn) els.refreshFreeSteamBtn.disabled = true;
+  await renderCurrentFreeSteam();
+  try {
+    await sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_FREE', advance: Boolean(advance) });
+    if (freeSteamSearchQuery.trim().length >= 2) {
+      await runLiveFreeSteamSearch(freeSteamSearchQuery.trim());
+    } else {
+      await scheduleRender();
+    }
+  } finally {
+    freeSteamRefreshing = false;
+    freeSteamRefreshingAdvance = false;
+    if (els.refreshFreeSteamBtn) els.refreshFreeSteamBtn.disabled = false;
+    await renderCurrentFreeSteam();
+  }
+}
+
+let freeSteamSearchSeq = 0;
+async function runLiveFreeSteamSearch(rawQuery) {
+  const cleanQuery = typeof rawQuery === 'string' ? rawQuery.trim() : '';
+  const seq = ++freeSteamSearchSeq;
+  if (cleanQuery.length < 2) {
+    freeSteamSearchLoading = false;
+    latestFreeSteamRemote = null;
+    await renderCurrentFreeSteam();
+    return;
+  }
+  freeSteamSearchLoading = true;
+  await renderCurrentFreeSteam();
+  const res = await sendRuntimeMessage({
+    type: 'CLAIMIT_SEARCH_STEAM_FREE',
+    query: cleanQuery,
+    sortBy: latestFreeSteamSort
+  });
+  if (seq !== freeSteamSearchSeq) return;
+  freeSteamSearchLoading = false;
+  if (res?.data && Array.isArray(res.data.games)) {
+    latestFreeSteamRemote = {
+      query: cleanQuery,
+      games: res.data.games
+    };
+  }
+  await renderCurrentFreeSteam();
+}
+
+let dealsSearchSeq = 0;
 async function runLiveSteamSearch(rawQuery) {
   const cleanQuery = typeof rawQuery === 'string' ? rawQuery.trim() : '';
-  const seq = ++dealsSearchRequestSeq;
+  const seq = ++dealsSearchSeq;
   if (cleanQuery.length < 2) {
     dealsSearchLoading = false;
     latestRemoteSearch = null;
@@ -813,7 +1077,7 @@ async function runLiveSteamSearch(rawQuery) {
     query: cleanQuery,
     sortBy: latestDealsSort
   });
-  if (seq !== dealsSearchRequestSeq) return;
+  if (seq !== dealsSearchSeq) return;
   dealsSearchLoading = false;
   if (res?.data && Array.isArray(res.data.deals)) {
     latestRemoteSearch = {
@@ -825,7 +1089,7 @@ async function runLiveSteamSearch(rawQuery) {
 }
 
 async function render() {
-  const [settings, historyMap, currentOffers, meta, storedRegion, cachedFx, alarm, logs, accounts, steamDeals, steamDealsMeta] = await Promise.all([
+  const [settings, historyMap, currentOffers, meta, storedRegion, cachedFx, alarm, logs, accounts, steamDeals, steamDealsMeta, steamFreeGames, steamFreeMeta] = await Promise.all([
     getSettings(),
     getHistory(),
     getCurrentOffers(),
@@ -836,15 +1100,19 @@ async function render() {
     logger.getAll().catch(() => []),
     getAccountStates(),
     getSteamDeals(),
-    getSteamDealsMeta()
+    getSteamDealsMeta(),
+    getSteamFreeGames(),
+    getSteamFreeMeta()
   ]);
   renderAccountsBar(accounts);
   latestSteamDeals = steamDeals;
   latestSteamDealsMeta = steamDealsMeta;
+  latestSteamFreeGames = steamFreeGames;
+  latestSteamFreeMeta = steamFreeMeta;
 
   const region = resolveRegionAndCurrency({ settings, storedRegion });
   const allHistory = Object.values(historyMap);
-  const needsFx = [...currentOffers, ...allHistory, ...steamDeals].some((item) => {
+  const needsFx = [...currentOffers, ...allHistory, ...steamDeals, ...steamFreeGames].some((item) => {
     const cur = normalizeCurrencyCode(item?.currencyCode ?? item?.currency);
     return cur && cur !== region.currency;
   });
@@ -869,10 +1137,16 @@ async function render() {
   latestSteamEnabled = Boolean(settings.stores?.steam?.enabled);
   latestMinDiscount = clampSteamMinDiscount(settings.steamMinDiscount);
   latestDealsSort = normalizeSteamDealsSort(settings.steamDealsSort);
+  latestFreeSteamSort = normalizeSteamFreeSort(settings.steamFreeSort);
   await renderCurrentDeals();
+  await renderCurrentFreeSteam();
   if (latestSteamEnabled && latestMinDiscount < 100 && steamDeals.length === 0 && !autoLoadedDealsOnce) {
     autoLoadedDealsOnce = true;
     sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_DEALS' });
+  }
+  if (latestSteamEnabled && steamFreeGames.length === 0 && !autoLoadedFreeSteamOnce) {
+    autoLoadedFreeSteamOnce = true;
+    sendRuntimeMessage({ type: 'CLAIMIT_REFRESH_STEAM_FREE' });
   }
 
   const paused = Boolean(settings.paused);
@@ -1103,6 +1377,84 @@ els.pauseBtn.addEventListener('click', async () => {
 
 els.checkNowBtn.addEventListener('click', triggerCheck);
 
+function bindCatalogControls({
+  inputEl,
+  clearBtnEl,
+  sortEl,
+  refreshBtnEl,
+  normalizeSort,
+  onSetSort,
+  onSaveSort,
+  onSetQuery,
+  onResetRemote,
+  onRender,
+  onRunSearch,
+  onRefreshAdvance
+}) {
+  let timer = null;
+  const clearTimer = () => {
+    if (timer) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+  };
+  controlCleanupFns.push(clearTimer);
+
+  sortEl?.addEventListener('change', async () => {
+    const val = normalizeSort(sortEl.value);
+    onSetSort(val);
+    onRender();
+    await onSaveSort(val);
+  });
+
+  inputEl?.addEventListener('input', () => {
+    const raw = inputEl.value;
+    onSetQuery(raw);
+    const trimmed = raw.trim();
+    clearTimer();
+    if (trimmed.length < 2) {
+      onResetRemote();
+      onRender();
+      return;
+    }
+    onRender();
+    timer = window.setTimeout(() => {
+      timer = null;
+      onRunSearch(trimmed);
+    }, 450);
+  });
+
+  inputEl?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      clearTimer();
+      const trimmed = inputEl.value.trim();
+      if (trimmed.length >= 2) {
+        onRunSearch(trimmed);
+      }
+    } else if (ev.key === 'Escape' && inputEl.value) {
+      ev.preventDefault();
+      clearTimer();
+      inputEl.value = '';
+      onSetQuery('');
+      onResetRemote();
+      onRender();
+    }
+  });
+
+  clearBtnEl?.addEventListener('click', () => {
+    if (!inputEl) return;
+    clearTimer();
+    inputEl.value = '';
+    onSetQuery('');
+    onResetRemote();
+    onRender();
+    inputEl.focus();
+  });
+
+  refreshBtnEl?.addEventListener('click', onRefreshAdvance);
+}
+
 els.dealsDiscountSlider?.addEventListener('input', () => {
   latestMinDiscount = clampSteamMinDiscount(els.dealsDiscountSlider.value);
   renderCurrentDeals();
@@ -1115,76 +1467,43 @@ els.dealsDiscountSlider?.addEventListener('change', async () => {
   await refreshTopSteamDeals();
 });
 
-els.dealsSortSelect?.addEventListener('change', async () => {
-  const val = normalizeSteamDealsSort(els.dealsSortSelect.value);
-  latestDealsSort = val;
-  renderCurrentDeals();
-  await saveSettings({ steamDealsSort: val });
-});
-
-els.dealsSearchInput?.addEventListener('input', () => {
-  dealsSearchQuery = els.dealsSearchInput.value;
-  const trimmed = dealsSearchQuery.trim();
-  if (dealsSearchTimer) {
-    window.clearTimeout(dealsSearchTimer);
-    dealsSearchTimer = null;
-  }
-  if (trimmed.length < 2) {
-    dealsSearchRequestSeq += 1;
+bindCatalogControls({
+  inputEl: els.dealsSearchInput,
+  clearBtnEl: els.clearDealsSearchBtn,
+  sortEl: els.dealsSortSelect,
+  refreshBtnEl: els.refreshDealsBtn,
+  normalizeSort: normalizeSteamDealsSort,
+  onSetSort: (val) => { latestDealsSort = val; },
+  onSaveSort: (val) => saveSettings({ steamDealsSort: val }),
+  onSetQuery: (val) => { dealsSearchQuery = val; },
+  onResetRemote: () => {
+    dealsSearchSeq += 1;
     dealsSearchLoading = false;
     latestRemoteSearch = null;
-    renderCurrentDeals();
-    return;
-  }
-  renderCurrentDeals();
-  dealsSearchTimer = window.setTimeout(() => {
-    dealsSearchTimer = null;
-    runLiveSteamSearch(trimmed);
-  }, 450);
+  },
+  onRender: renderCurrentDeals,
+  onRunSearch: runLiveSteamSearch,
+  onRefreshAdvance: () => refreshTopSteamDeals({ advance: true })
 });
 
-els.dealsSearchInput?.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Enter') {
-    ev.preventDefault();
-    if (dealsSearchTimer) {
-      window.clearTimeout(dealsSearchTimer);
-      dealsSearchTimer = null;
-    }
-    const trimmed = els.dealsSearchInput.value.trim();
-    if (trimmed.length >= 2) {
-      runLiveSteamSearch(trimmed);
-    }
-  } else if (ev.key === 'Escape' && els.dealsSearchInput.value) {
-    ev.preventDefault();
-    els.dealsSearchInput.value = '';
-    dealsSearchQuery = '';
-    dealsSearchRequestSeq += 1;
-    dealsSearchLoading = false;
-    latestRemoteSearch = null;
-    if (dealsSearchTimer) {
-      window.clearTimeout(dealsSearchTimer);
-      dealsSearchTimer = null;
-    }
-    renderCurrentDeals();
-  }
+bindCatalogControls({
+  inputEl: els.freeSteamSearchInput,
+  clearBtnEl: els.clearFreeSteamSearchBtn,
+  sortEl: els.freeSteamSortSelect,
+  refreshBtnEl: els.refreshFreeSteamBtn,
+  normalizeSort: normalizeSteamFreeSort,
+  onSetSort: (val) => { latestFreeSteamSort = val; },
+  onSaveSort: (val) => saveSettings({ steamFreeSort: val }),
+  onSetQuery: (val) => { freeSteamSearchQuery = val; },
+  onResetRemote: () => {
+    freeSteamSearchSeq += 1;
+    freeSteamSearchLoading = false;
+    latestFreeSteamRemote = null;
+  },
+  onRender: renderCurrentFreeSteam,
+  onRunSearch: runLiveFreeSteamSearch,
+  onRefreshAdvance: () => refreshFreeSteamCatalog({ advance: true })
 });
-
-els.clearDealsSearchBtn?.addEventListener('click', () => {
-  if (!els.dealsSearchInput) return;
-  els.dealsSearchInput.value = '';
-  dealsSearchQuery = '';
-  dealsSearchRequestSeq += 1;
-  dealsSearchLoading = false;
-  latestRemoteSearch = null;
-  if (dealsSearchTimer) {
-    window.clearTimeout(dealsSearchTimer);
-    dealsSearchTimer = null;
-  }
-  renderCurrentDeals();
-  els.dealsSearchInput.focus();
-});
-
-els.refreshDealsBtn?.addEventListener('click', () => refreshTopSteamDeals({ advance: true }));
 
 els.openOptionsBtn.addEventListener('click', () => {
   chrome.runtime.openOptionsPage();
@@ -1206,10 +1525,7 @@ const countdownRefreshTimer = window.setInterval(() => {
 
 function cleanupTimers() {
   window.clearInterval(countdownRefreshTimer);
-  if (dealsSearchTimer) {
-    window.clearTimeout(dealsSearchTimer);
-    dealsSearchTimer = null;
-  }
+  for (const fn of controlCleanupFns) fn();
 }
 
 window.addEventListener('unload', cleanupTimers);

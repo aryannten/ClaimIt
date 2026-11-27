@@ -7,7 +7,7 @@
 import { classifyOffers } from './classifier.js';
 import { getSelectorsConfig } from './remote-config.js';
 import { getEnabledProviders, getProvider } from './providers/index.js';
-import { fetchSteamDeals, fetchSteamDealsWithMeta } from './providers/steam.js';
+import { fetchSteamDeals, fetchSteamDealsWithMeta, fetchSteamFreeGamesWithMeta } from './providers/steam.js';
 import { CLAIM_STATUS, humanDelay } from './providers/constants.js';
 import {
   getSettings,
@@ -27,6 +27,8 @@ import {
   saveAccountState,
   setSteamDeals,
   getSteamDealsMeta,
+  setSteamFreeGames,
+  getSteamFreeMeta,
   clampSteamMinDiscount
 } from './storage.js';
 import {
@@ -456,6 +458,28 @@ async function runCheckCycleInternal(options = {}) {
         minDiscount: targetDiscount
       });
     }
+
+    // Refresh first batch of all free Steam games (best-effort browsing catalog)
+    if (latestForDeals.stores?.steam?.enabled && !deps.fetchSteamDeals) {
+      try {
+        const freeBatch = await fetchSteamFreeGamesWithMeta({
+          config,
+          region,
+          sortBy: latestForDeals.steamFreeSort || 'popular',
+          startOffset: 0
+        });
+        await setSteamFreeGames(freeBatch.games, {
+          startOffset: freeBatch.startOffset,
+          endOffset: freeBatch.endOffset,
+          nextOffset: freeBatch.nextOffset,
+          totalCount: freeBatch.totalCount
+        });
+      } catch (err) {
+        await logger.warn('engine', 'Failed to refresh Steam free games catalog', {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
     const metaBefore = await loadMetaFn();
     const shouldReschedule =
       trigger !== 'manual' ||
@@ -551,71 +575,108 @@ export async function claimSingleOffer(storeId, offerId) {
   return result;
 }
 
-/**
- * Refresh Steam's paid discount deals list on demand.
- * Pass `{ advance: true }` from the Deals Refresh button to step to the next batch of Steam rows
- * so different games appear, wrapping cleanly back to offset 0 when reaching the end.
- * @param {{ advance?: boolean, fetchFn?: typeof fetch }} [options]
- */
-export async function refreshSteamDeals(options = {}) {
+async function refreshCatalogBatch({
+  advance = false,
+  configOverride = null,
+  minDiscount = null,
+  getPrevMeta,
+  fetchBatch,
+  saveBatch
+}) {
   const [settings, storedRegion, { config }, prevMeta] = await Promise.all([
     getSettings(),
     getRegionState(),
-    options?.config ? Promise.resolve({ config: options.config }) : getSelectorsConfig(),
-    options?.advance ? getSteamDealsMeta() : Promise.resolve(null)
+    configOverride ? Promise.resolve({ config: configOverride }) : getSelectorsConfig(),
+    advance ? getPrevMeta() : Promise.resolve(null)
   ]);
-  const targetDiscount = clampSteamMinDiscount(settings.steamMinDiscount);
-  if (!settings.stores?.steam?.enabled || targetDiscount >= 100) {
-    await setSteamDeals([], {
+
+  if (!settings.stores?.steam?.enabled || (minDiscount !== null && minDiscount(settings) >= 100)) {
+    const emptyMeta = {
       startOffset: 0,
       endOffset: 0,
       nextOffset: 0,
       totalCount: null,
-      minDiscount: targetDiscount
-    });
+      minDiscount: minDiscount ? minDiscount(settings) : null
+    };
+    await saveBatch([], emptyMeta);
     return [];
   }
 
+  const targetMin = minDiscount ? minDiscount(settings) : null;
   const region = resolveRegionAndCurrency({ settings, storedRegion });
-  const sortBy = settings.steamDealsSort || 'popular';
+  const sameThreshold = targetMin === null || prevMeta?.minDiscount === targetMin;
   const startOffset =
-    options?.advance &&
+    advance &&
     prevMeta &&
-    prevMeta.minDiscount === targetDiscount &&
+    sameThreshold &&
     Number.isFinite(prevMeta.nextOffset) &&
     prevMeta.nextOffset > 0
       ? prevMeta.nextOffset
       : 0;
 
-  let batch = await fetchSteamDealsWithMeta({
-    config,
-    region,
-    minDiscount: targetDiscount,
-    sortBy,
-    startOffset,
-    fetchFn: options?.fetchFn
-  });
-
-  // Wrap cleanly back to batch 1 if an advanced slice contained no qualifying deals at this %.
-  if (startOffset > 0 && batch.deals.length === 0) {
-    batch = await fetchSteamDealsWithMeta({
-      config,
-      region,
-      minDiscount: targetDiscount,
-      sortBy,
-      startOffset: 0,
-      fetchFn: options?.fetchFn
-    });
+  let batch = await fetchBatch({ settings, config, region, targetMin, startOffset });
+  if (startOffset > 0 && batch.items.length === 0) {
+    batch = await fetchBatch({ settings, config, region, targetMin, startOffset: 0 });
   }
 
-  await setSteamDeals(batch.deals, {
+  await saveBatch(batch.items, {
     startOffset: batch.startOffset,
     endOffset: batch.endOffset,
     nextOffset: batch.nextOffset,
     totalCount: batch.totalCount,
-    minDiscount: targetDiscount
+    minDiscount: targetMin
   });
-  return batch.deals;
+  return batch.items;
+}
+
+/**
+ * Refresh Steam's paid discount deals list on demand.
+ * Pass `{ advance: true }` from the Deals Refresh button to step to the next batch of Steam rows
+ * so different games appear, wrapping cleanly back to offset 0 when reaching the end.
+ * @param {{ advance?: boolean, fetchFn?: typeof fetch, config?: object }} [options]
+ */
+export async function refreshSteamDeals(options = {}) {
+  return refreshCatalogBatch({
+    advance: Boolean(options?.advance),
+    configOverride: options?.config || null,
+    minDiscount: (s) => clampSteamMinDiscount(s.steamMinDiscount),
+    getPrevMeta: getSteamDealsMeta,
+    fetchBatch: async ({ settings, config, region, targetMin, startOffset }) => {
+      const res = await fetchSteamDealsWithMeta({
+        config,
+        region,
+        minDiscount: targetMin,
+        sortBy: settings.steamDealsSort || 'popular',
+        startOffset,
+        fetchFn: options?.fetchFn
+      });
+      return { ...res, items: res.deals };
+    },
+    saveBatch: setSteamDeals
+  });
+}
+
+/**
+ * Refresh the Free Steam catalog batch on demand (`{ advance: true }` rotates to the next batch).
+ * @param {{ advance?: boolean, fetchFn?: typeof fetch, config?: object }} [options]
+ */
+export async function refreshSteamFreeGames(options = {}) {
+  return refreshCatalogBatch({
+    advance: Boolean(options?.advance),
+    configOverride: options?.config || null,
+    getPrevMeta: getSteamFreeMeta,
+    fetchBatch: async ({ settings, config, region, startOffset }) => {
+      const res = await fetchSteamFreeGamesWithMeta({
+        config,
+        region,
+        sortBy: settings.steamFreeSort || 'popular',
+        startOffset,
+        fetchFn: options?.fetchFn
+      });
+      return { ...res, items: res.games };
+    },
+    saveBatch: setSteamFreeGames
+  });
 }
 
 /**
@@ -642,4 +703,30 @@ export async function searchSteamDeals(query, options = {}) {
     sortBy: options.sortBy || settings.steamDealsSort || 'popular'
   });
   return { query: cleanQuery, deals };
+}
+
+/**
+ * Search all free Steam games matching `query` without altering the cached catalog batch.
+ * @param {string} query
+ * @param {{ sortBy?: string, fetchFn?: typeof fetch, config?: object }} [options]
+ */
+export async function searchSteamFreeGames(query, options = {}) {
+  const cleanQuery = typeof query === 'string' ? query.trim().slice(0, 80) : '';
+  const [settings, storedRegion, { config }] = await Promise.all([
+    getSettings(),
+    getRegionState(),
+    options?.config ? Promise.resolve({ config: options.config }) : getSelectorsConfig()
+  ]);
+  if (!settings.stores?.steam?.enabled || !cleanQuery || cleanQuery.length < 2) {
+    return { query: cleanQuery, games: [] };
+  }
+  const region = resolveRegionAndCurrency({ settings, storedRegion });
+  const res = await fetchSteamFreeGamesWithMeta({
+    config,
+    region,
+    query: cleanQuery,
+    sortBy: options.sortBy || settings.steamFreeSort || 'popular',
+    fetchFn: options?.fetchFn
+  });
+  return { query: cleanQuery, games: res.games };
 }
